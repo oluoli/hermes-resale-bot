@@ -5,7 +5,8 @@ import gspread
 import re
 from datetime import datetime, timedelta, timezone
 from playwright.async_api import async_playwright
-import playwright_stealth
+# インポートを修正
+from playwright_stealth import stealth
 from oauth2client.service_account import ServiceAccountCredentials
 
 # --- 設定：為替レート ---
@@ -78,7 +79,7 @@ async def scrape_hermes(page, country_code, category_path):
         await page.wait_for_selector(".product-item", timeout=30000)
         for _ in range(8):
             await page.mouse.wheel(0, 1000)
-            await asyncio.sleep(1)
+            await asyncio.sleep(1.2)
         items = await page.query_selector_all(".product-item")
         products = {}
         for item in items:
@@ -94,11 +95,11 @@ async def scrape_hermes(page, country_code, category_path):
         print(f"    -> {country_code}: {len(products)}個検知")
         return products
     except:
-        print(f"    [!] {country_code} スキップ (読み込み失敗)")
+        print(f"    [!] {country_code} 0個検知 (読み込み失敗または在庫なし)")
         return {}
 
 async def run():
-    # --- 1. 認証とシート準備 ---
+    # --- 1. 認証 ---
     creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive'])
     client = gspread.authorize(creds)
@@ -111,7 +112,6 @@ async def run():
     today_date = datetime.now(JST).strftime("%Y/%m/%d")
     header = ["追加日", "ジャンル", "国", "品番", "商品名", "現地価格", "日本円目安", "URL"]
 
-    # 既存データの読み込み（1回だけ）
     master_all_values = sheet_master.get_all_values()
     if not master_all_values:
         sheet_master.append_row(header)
@@ -119,14 +119,16 @@ async def run():
     else:
         existing_skus = {row[3] for row in master_all_values if len(row) > 3}
 
-    # --- 2. スクレイピング（全データをリストに溜める） ---
+    # --- 2. 調査フェーズ ---
     final_append_list = []
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(user_agent="Mozilla/5.0...", viewport={"width": 1280, "height": 1080})
+        # 画面サイズを大きめにして検知漏れを防ぐ
+        context = await browser.new_context(user_agent="Mozilla/5.0...", viewport={"width": 1600, "height": 1200})
         page = await context.new_page()
-        await playwright_stealth.stealth_async(page)
+        # 修正箇所: stealth(page) を正しく呼び出し（awaitは不要な場合が多いですが、ライブラリ仕様に従います）
+        stealth(page) 
 
         for cat_name, path_jp in CONFIG["JP"]["paths"].items():
             print(f"\n調査開始: {cat_name}")
@@ -137,37 +139,34 @@ async def run():
                 
                 for sku, data in os_inv.items():
                     if sku not in jp_inv and sku not in existing_skus:
-                        # 価格換算
                         p_num = float(re.sub(r'[^\d.]', '', data['price'].replace(',', ''))) if data['price'] != "0" else 0
                         jpy = int(p_num * EXCHANGE_RATES.get(country, 1.0))
                         
                         row = [today_date, cat_name, country, sku, data['name'], data['price'], f"¥{jpy:,}", data['url']]
                         final_append_list.append(row)
-                        existing_skus.add(sku) # 同じ実行内での重複防止
+                        existing_skus.add(sku)
                 await asyncio.sleep(2)
         await browser.close()
 
-    # --- 3. 最後に一括書き込み（ここが改善の肝） ---
+    # --- 3. 一括書き込みフェーズ ---
     if final_append_list:
-        print(f"\n--- 書き込みフェーズ ---")
-        print(f"合計 {len(final_append_list)} 件の新規アイテムを書き込みます...")
-        
-        # 今日の新着シートをリセット
+        print(f"\n新規アイテム {len(final_append_list)} 件を書き込みます...")
         sheet_today.clear()
         sheet_today.append_row(header)
 
-        # 失敗してもやり直すループ
         for target_sheet in [sheet_master, sheet_today]:
             for attempt in range(5):
                 try:
+                    # 分割せずに一括で書き込む（データが多すぎる場合は分割が必要ですが、通常はこれでOK）
                     target_sheet.append_rows(final_append_list)
-                    print(f"  [OK] {target_sheet.title} への書き込み完了")
+                    print(f"  [OK] {target_sheet.title} 更新完了")
+                    await asyncio.sleep(5) # API休憩
                     break
                 except Exception as e:
-                    print(f"  [!] {target_sheet.title} 失敗 (リトライ {attempt+1}): {e}")
-                    await asyncio.sleep(20) # 長めに待つ
+                    print(f"  [!] リトライ {attempt+1}: {e}")
+                    await asyncio.sleep(20)
     else:
-        print("\n新着アイテムはありませんでした。")
+        print("\n新着はありませんでした。")
 
 if __name__ == "__main__":
     asyncio.run(run())
