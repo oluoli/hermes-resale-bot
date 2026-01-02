@@ -116,7 +116,7 @@ async def run():
             jp_inventory = await scrape_hermes(page, CONFIG["JP"]["code"], CONFIG["JP"]["paths"][cat_name])
             
             # 2. 海外各国の在庫と比較
-            for country_key in ["FR", "HK", "US"]:
+            for country_key in ["FR", "HK", "US", "KR"]:
                 print(f" -> {country_key} をスキャン...")
                 path = CONFIG[country_key]["paths"].get(cat_name)
                 if not path: continue
