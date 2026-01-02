@@ -3,7 +3,7 @@ import os
 import json
 import gspread
 import re
-# 日本時間対応
+import time
 from datetime import datetime, timedelta, timezone
 from playwright.async_api import async_playwright
 import playwright_stealth
@@ -17,7 +17,6 @@ EXCHANGE_RATES = {
     "KR": 0.11
 }
 
-# ユーザー様のCONFIG（そのまま維持）
 CONFIG = {
     "JP": {"code": "jp/ja", "paths": {
         "ゴールドジュエリー": "jewelry/gold-jewelry",
@@ -101,6 +100,26 @@ CONFIG = {
     }}
 }
 
+# --- ヘルパー関数：リトライ機能付き書き込み ---
+async def safe_append_rows(sheet, rows, max_retries=3):
+    if not rows:
+        return True
+    
+    for attempt in range(max_retries):
+        try:
+            sheet.append_rows(rows)
+            print(f"      [OK] {len(rows)}件の書き込みに成功しました。")
+            await asyncio.sleep(2) # API制限回避のための短い待機
+            return True
+        except Exception as e:
+            wait_time = (attempt + 1) * 5
+            print(f"      [!] 書き込み失敗 (試行 {attempt + 1}): {e}")
+            print(f"      [!] {wait_time}秒後に再試行します...")
+            await asyncio.sleep(wait_time)
+    
+    print(f"      [ERROR] {max_retries}回試行しましたが書き込みに失敗しました。")
+    return False
+
 def convert_price_to_jpy(price_str, country_key):
     try:
         num_str = re.sub(r'[^\d.]', '', price_str.replace(',', ''))
@@ -116,27 +135,23 @@ async def scrape_hermes(page, country_code, category_path, retry=1):
     
     for attempt in range(retry + 1):
         try:
-            # ページ遷移と要素の出現を待つ
             await page.goto(url, wait_until="load", timeout=90000)
-            
-            # 商品要素が少なくとも1つ出現するまで最大30秒粘る
             try:
                 await page.wait_for_selector(".product-item", timeout=30000)
             except:
-                print(f"   [!] 商品要素が見つかりません (試行 {attempt + 1}): {url}")
+                print(f"    [!] 商品が見つかりません (試行 {attempt + 1}): {url}")
                 if attempt < retry:
                     await asyncio.sleep(5)
                     continue
                 return {}
 
-            # 徐々にスクロールしてLazy Load（遅延読み込み）を解消
             for i in range(7):
                 await page.mouse.wheel(0, 1200)
                 await asyncio.sleep(1.5)
 
             items = await page.query_selector_all(".product-item")
             if len(items) > 0:
-                print(f"   -> {country_code}: {len(items)}個検知")
+                print(f"    -> {country_code}: {len(items)}個検知")
                 for item in items:
                     name_el = await item.query_selector(".product-item-name")
                     price_el = await item.query_selector(".product-item-price")
@@ -148,24 +163,26 @@ async def scrape_hermes(page, country_code, category_path, retry=1):
                         sku_match = re.search(r'H[A-Z0-9]{5,}', link)
                         sku = sku_match.group(0) if sku_match else name
                         products[sku] = {"name": name, "price": price_text, "url": f"https://www.hermes.com{link}"}
-                return products # 成功したらループを抜ける
+                return products
             
             elif attempt < retry:
-                print(f"   [!] 0件のため再試行します...")
+                print(f"    [!] 0件のため再試行します...")
                 await asyncio.sleep(5)
                 
         except Exception as e:
-            print(f"   × エラー発生 ({country_code} / {category_path}): {e}")
+            print(f"    × エラー発生 ({country_code} / {category_path}): {e}")
             if attempt < retry:
                 await asyncio.sleep(5)
     
     return products
 
 async def run():
+    # 認証
     creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive'])
     client = gspread.authorize(creds)
     
+    # シート取得
     spreadsheet = client.open("Hermes_Check_List")
     sheet_master = spreadsheet.get_worksheet(0)
     
@@ -174,10 +191,8 @@ async def run():
     except gspread.WorksheetNotFound:
         sheet_today = spreadsheet.add_worksheet(title="Today_New", rows="100", cols="20")
     
-    # 【重要】日本時間 (JST) での日付取得
     JST = timezone(timedelta(hours=+9), 'JST')
     today_date = datetime.now(JST).strftime("%Y/%m/%d")
-    
     header = ["追加日", "ジャンル", "国", "品番", "商品名", "現地価格", "日本円目安", "URL"]
     
     all_data = sheet_master.get_all_values()
@@ -187,11 +202,11 @@ async def run():
     else:
         existing_skus = {row[3] for row in all_data if len(row) > 3}
 
+    # 今日の新着をリセット
     sheet_today.clear()
     sheet_today.append_row(header)
 
     async with async_playwright() as p:
-        # ヘッドレスモードを維持しつつ、より自然なブラウザ環境をエミュレート
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -222,9 +237,13 @@ async def run():
                         existing_skus.add(sku)
                 
                 if new_rows:
-                    sheet_master.append_rows(new_rows)
-                    sheet_today.append_rows(new_rows)
-                    print(f"    ☆ {len(new_rows)}件の新規アイテムを保存しました")
+                    print(f"    ☆ 新規 {len(new_rows)}件。シートへ書き込み中...")
+                    # マスターと今日、両方にリトライ機能付きで書き込み
+                    success_master = await safe_append_rows(sheet_master, new_rows)
+                    success_today = await safe_append_rows(sheet_today, new_rows)
+                    
+                    if not success_master or not success_today:
+                        print(f"    [!] 一部の書き込みに最終的に失敗しました。ログを確認してください。")
                 
                 await asyncio.sleep(5)
             await asyncio.sleep(7)
