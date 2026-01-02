@@ -11,42 +11,52 @@ from oauth2client.service_account import ServiceAccountCredentials
 CONFIG = {
     "JP": {"code": "jp/ja", "paths": {
         "Jewelry": "jewelry/gold-jewelry",
-        "Blankets": "home/blankets-and-pillows",
-        "Baby": "baby",
-        "Pets": "home/equestrian-and-dog",
+        "Blankets": "home/textiles",
+        "Baby": "gifts-and-petit-h/baby-gifts",
+        "Pets": "home-outdoor-and-equestrian/equestrian-and-dogs/dog",
         "PetitH": "petit-h/all-petit-h",
         "Bags": "women/bags-and-small-leather-goods/bags-and-clutches",
-        "Men_Accessories": "men/accessories",
+        "Men_bag": "men/bags-and-small-leather-goods/bags",
         "Tableware": "home/tableware"
     }},
     "FR": {"code": "fr/fr", "paths": {
         "Jewelry": "bijouterie/bijoux-en-or",
-        "Blankets": "maison/couvertures-et-oreillers",
-        "Baby": "enfant/bebe",
-        "Pets": "maison-plein-air-et-equitation/equitation-et-chien",
+        "Blankets": "maison/textiles",
+        "Baby": "cadeaux-et-petit-h/cadeaux-de-naissance",
+        "Pets": "maison-plein-air-et-equitation/equitation-et-chien/chien/",
         "PetitH": "petit-h",
         "Bags": "femme/sacs-et-petite-maroquinerie/sacs-et-pochettes",
-        "Men_Accessories": "homme/accessoires",
+        "Men_bag": "homme/sacs-et-petite-maroquinerie/sacs",
         "Tableware": "maison/art-de-la-table"
     }},
     "HK": {"code": "hk/en", "paths": {
         "Jewelry": "jewelry/gold-jewelry",
-        "Blankets": "home/blankets-and-pillows",
-        "Baby": "baby",
-        "Pets": "home/equestrian-and-dog",
+        "Blankets": "home/textiles",
+        "Baby": "gifts-and-petit-h/baby-gifts",
+        "Pets": "home-outdoor-and-equestrian/equestrian-and-dogs/dog",
         "PetitH": "petit-h",
         "Bags": "women/bags-and-small-leather-goods/bags-and-clutches",
-        "Men_Accessories": "men/accessories",
+        "Men_bag": "men/bags-and-small-leather-goods/bags",
         "Tableware": "home/tableware"
     }},
     "US": {"code": "us/en", "paths": {
         "Jewelry": "jewelry/gold-jewelry",
-        "Blankets": "home/blankets-and-pillows",
-        "Baby": "baby",
-        "Pets": "home/equestrian-and-dog",
+        "Blankets": "home/textiles",
+        "Baby": "gifts-and-petit-h/baby-gifts",
+        "Pets": "home-outdoor-and-equestrian/equestrian-and-dogs/dog",
         "PetitH": "petit-h",
         "Bags": "women/bags-and-small-leather-goods/bags-and-clutches",
-        "Men_Accessories": "men/accessories",
+        "Men_bag": "men/bags-and-small-leather-goods/bags",
+        "Tableware": "home/tableware"
+    }},
+    "KR": {"code": "us/en", "paths": {
+        "Jewelry": "jewelry/gold-jewelry",
+        "Blankets": "home/textiles",
+        "Baby": "gifts-and-petit-h/baby-gifts",
+        "Pets": "home-outdoor-and-equestrian/equestrian-and-dogs/dog",
+        "PetitH": "petit-h",
+        "Bags": "women/bags-and-small-leather-goods/bags-and-clutches",
+        "Men_bag": "men/bags-and-small-leather-goods/bags",
         "Tableware": "home/tableware"
     }}
 }
