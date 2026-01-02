@@ -5,14 +5,13 @@ import gspread
 import re
 from datetime import datetime, timedelta, timezone
 from playwright.async_api import async_playwright
-# インポートを修正
-from playwright_stealth import stealth
+# インポートを最も確実な形式に変更
+import playwright_stealth
 from oauth2client.service_account import ServiceAccountCredentials
 
 # --- 設定：為替レート ---
 EXCHANGE_RATES = {"FR": 165.0, "HK": 20.0, "US": 155.0, "KR": 0.11}
 
-# ユーザー様の調整済みCONFIG
 CONFIG = {
     "JP": {"code": "jp/ja", "paths": {
         "ゴールドジュエリー": "jewelry/gold-jewelry",
@@ -76,10 +75,14 @@ async def scrape_hermes(page, country_code, category_path):
     url = f"https://www.hermes.com/{country_code}/category/{category_path}/#|"
     try:
         await page.goto(url, wait_until="load", timeout=90000)
+        # 商品リストが出るまで待機
         await page.wait_for_selector(".product-item", timeout=30000)
-        for _ in range(8):
-            await page.mouse.wheel(0, 1000)
-            await asyncio.sleep(1.2)
+        
+        # 画面をスクロールして読み込ませる
+        for _ in range(5):
+            await page.mouse.wheel(0, 1500)
+            await asyncio.sleep(1.5)
+            
         items = await page.query_selector_all(".product-item")
         products = {}
         for item in items:
@@ -92,14 +95,15 @@ async def scrape_hermes(page, country_code, category_path):
                 link = await link_el.get_attribute("href")
                 sku = re.search(r'H[A-Z0-9]{5,}', link).group(0) if re.search(r'H[A-Z0-9]{5,}', link) else name
                 products[sku] = {"name": name, "price": price, "url": f"https://www.hermes.com{link}"}
-        print(f"    -> {country_code}: {len(products)}個検知")
+        
+        print(f"    -> {country_code}: {len(products)}個の商品を確認")
         return products
-    except:
-        print(f"    [!] {country_code} 0個検知 (読み込み失敗または在庫なし)")
+    except Exception as e:
+        print(f"    [!] {country_code} エラー: {e}")
         return {}
 
 async def run():
-    # --- 1. 認証 ---
+    # --- 1. シート準備 ---
     creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive'])
     client = gspread.authorize(creds)
@@ -124,49 +128,60 @@ async def run():
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        # 画面サイズを大きめにして検知漏れを防ぐ
-        context = await browser.new_context(user_agent="Mozilla/5.0...", viewport={"width": 1600, "height": 1200})
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            viewport={"width": 1440, "height": 900}
+        )
         page = await context.new_page()
-        # 修正箇所: stealth(page) を正しく呼び出し（awaitは不要な場合が多いですが、ライブラリ仕様に従います）
-        stealth(page) 
+        
+        # 修正の要: モジュールの中の関数を正しく呼び出し
+        playwright_stealth.stealth_sync(page)
 
         for cat_name, path_jp in CONFIG["JP"]["paths"].items():
-            print(f"\n調査開始: {cat_name}")
+            print(f"\n【カテゴリー調査】: {cat_name}")
+            # 日本の在庫を取得
             jp_inv = await scrape_hermes(page, CONFIG["JP"]["code"], path_jp)
             
             for country in ["FR", "HK", "US", "KR"]:
+                print(f"  調査中 -> {country}")
                 os_inv = await scrape_hermes(page, CONFIG[country]["code"], CONFIG[country]["paths"][cat_name])
                 
                 for sku, data in os_inv.items():
+                    # 日本に存在せず、マスターにも登録されていないものだけ
                     if sku not in jp_inv and sku not in existing_skus:
-                        p_num = float(re.sub(r'[^\d.]', '', data['price'].replace(',', ''))) if data['price'] != "0" else 0
+                        # 価格から数値のみ抽出して日本円換算
+                        try:
+                            p_num = float(re.sub(r'[^\d.]', '', data['price'].replace(',', '')))
+                        except:
+                            p_num = 0
                         jpy = int(p_num * EXCHANGE_RATES.get(country, 1.0))
                         
                         row = [today_date, cat_name, country, sku, data['name'], data['price'], f"¥{jpy:,}", data['url']]
                         final_append_list.append(row)
-                        existing_skus.add(sku)
-                await asyncio.sleep(2)
+                        existing_skus.add(sku) # 同じ実行内での重複を防止
+                
+                await asyncio.sleep(3) # 国ごとに休憩
+            await asyncio.sleep(5) # カテゴリーごとに休憩
+            
         await browser.close()
 
-    # --- 3. 一括書き込みフェーズ ---
+    # --- 3. 最後にまとめて書き込み ---
     if final_append_list:
-        print(f"\n新規アイテム {len(final_append_list)} 件を書き込みます...")
+        print(f"\n--- 書き込み開始 (全 {len(final_append_list)} 件) ---")
         sheet_today.clear()
         sheet_today.append_row(header)
 
         for target_sheet in [sheet_master, sheet_today]:
-            for attempt in range(5):
+            for attempt in range(3):
                 try:
-                    # 分割せずに一括で書き込む（データが多すぎる場合は分割が必要ですが、通常はこれでOK）
                     target_sheet.append_rows(final_append_list)
-                    print(f"  [OK] {target_sheet.title} 更新完了")
-                    await asyncio.sleep(5) # API休憩
+                    print(f"  [完了] {target_sheet.title}")
                     break
                 except Exception as e:
-                    print(f"  [!] リトライ {attempt+1}: {e}")
-                    await asyncio.sleep(20)
+                    print(f"  [!] 書き込みエラー (再試行 {attempt+1}): {e}")
+                    await asyncio.sleep(10)
     else:
-        print("\n新着はありませんでした。")
+        print("\n新着アイテムはありませんでした。")
 
 if __name__ == "__main__":
     asyncio.run(run())
