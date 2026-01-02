@@ -9,7 +9,7 @@ from playwright.async_api import async_playwright
 import playwright_stealth
 from oauth2client.service_account import ServiceAccountCredentials
 
-# --- 設定：為替レート ---
+# --- 設定：為替レート（最新の数値に微調整してください） ---
 EXCHANGE_RATES = {
     "FR": 165.0,
     "HK": 20.0,
@@ -17,6 +17,7 @@ EXCHANGE_RATES = {
     "KR": 0.11
 }
 
+# ユーザー様の調整済みCONFIG
 CONFIG = {
     "JP": {"code": "jp/ja", "paths": {
         "ゴールドジュエリー": "jewelry/gold-jewelry",
@@ -100,109 +101,94 @@ CONFIG = {
     }}
 }
 
-# --- ヘルパー関数：リトライ機能付き書き込み ---
-async def safe_append_rows(sheet, rows, max_retries=3):
-    if not rows:
-        return True
+# --- ヘルパー：検証付き書き込み ---
+async def verify_and_append_rows(sheet, rows, max_attempts=5):
+    if not rows: return True
+    verify_sku = rows[-1][3] # 最後に書き込むSKUを確認用にする
     
-    for attempt in range(max_retries):
+    for attempt in range(max_attempts):
         try:
             sheet.append_rows(rows)
-            print(f"      [OK] {len(rows)}件の書き込みに成功しました。")
-            await asyncio.sleep(2) # API制限回避のための短い待機
-            return True
+            await asyncio.sleep(5) # 反映待ち
+            # 末尾15行を取得して検証
+            total = len(sheet.get_all_values())
+            check_range = f"D{max(1, total-20)}:D{total}"
+            written_skus = [val for sublist in sheet.get_values(check_range) for val in sublist]
+            
+            if verify_sku in written_skus:
+                print(f"      [Check OK] 書き込みを確認しました。")
+                return True
+            print(f"      [?] 書き込み未検知。再試行します...")
         except Exception as e:
-            wait_time = (attempt + 1) * 5
-            print(f"      [!] 書き込み失敗 (試行 {attempt + 1}): {e}")
-            print(f"      [!] {wait_time}秒後に再試行します...")
-            await asyncio.sleep(wait_time)
-    
-    print(f"      [ERROR] {max_retries}回試行しましたが書き込みに失敗しました。")
+            print(f"      [!] APIエラー: {e}")
+        
+        await asyncio.sleep((attempt + 1) * 7) # 徐々に待機を長くする
     return False
 
 def convert_price_to_jpy(price_str, country_key):
     try:
         num_str = re.sub(r'[^\d.]', '', price_str.replace(',', ''))
         price_num = float(num_str)
-        rate = EXCHANGE_RATES.get(country_key, 1.0)
-        return int(price_num * rate)
-    except:
-        return 0
+        return int(price_num * EXCHANGE_RATES.get(country_key, 1.0))
+    except: return 0
 
-async def scrape_hermes(page, country_code, category_path, retry=1):
+async def scrape_hermes(page, country_code, category_path, max_retry=2):
     url = f"https://www.hermes.com/{country_code}/category/{category_path}/#|"
-    products = {}
     
-    for attempt in range(retry + 1):
+    for attempt in range(max_retry + 1):
         try:
             await page.goto(url, wait_until="load", timeout=90000)
-            try:
-                await page.wait_for_selector(".product-item", timeout=30000)
-            except:
-                print(f"    [!] 商品が見つかりません (試行 {attempt + 1}): {url}")
-                if attempt < retry:
-                    await asyncio.sleep(5)
-                    continue
-                return {}
-
-            for i in range(7):
-                await page.mouse.wheel(0, 1200)
-                await asyncio.sleep(1.5)
-
+            await page.wait_for_selector(".product-item", timeout=30000)
+            
+            # Lazy load対策のスクロール
+            for _ in range(8):
+                await page.mouse.wheel(0, 1000)
+                await asyncio.sleep(1.2)
+            
             items = await page.query_selector_all(".product-item")
             if len(items) > 0:
                 print(f"    -> {country_code}: {len(items)}個検知")
+                products = {}
                 for item in items:
                     name_el = await item.query_selector(".product-item-name")
                     price_el = await item.query_selector(".product-item-price")
                     link_el = await item.query_selector("a")
                     if name_el and link_el:
                         name = (await name_el.inner_text()).strip()
-                        price_text = (await price_el.inner_text()).strip() if price_el else "0"
+                        price = (await price_el.inner_text()).strip() if price_el else "0"
                         link = await link_el.get_attribute("href")
-                        sku_match = re.search(r'H[A-Z0-9]{5,}', link)
-                        sku = sku_match.group(0) if sku_match else name
-                        products[sku] = {"name": name, "price": price_text, "url": f"https://www.hermes.com{link}"}
+                        sku = (re.search(r'H[A-Z0-9]{5,}', link).group(0)) if re.search(r'H[A-Z0-9]{5,}', link) else name
+                        products[sku] = {"name": name, "price": price, "url": f"https://www.hermes.com{link}"}
                 return products
             
-            elif attempt < retry:
-                print(f"    [!] 0件のため再試行します...")
-                await asyncio.sleep(5)
-                
-        except Exception as e:
-            print(f"    × エラー発生 ({country_code} / {category_path}): {e}")
-            if attempt < retry:
-                await asyncio.sleep(5)
-    
-    return products
+            print(f"    [!] {country_code} 商品0件。リロードして再試行...")
+            await asyncio.sleep(5)
+        except:
+            if attempt == max_retry: print(f"    [×] {country_code} 読み込み失敗")
+            await asyncio.sleep(5)
+    return {}
 
 async def run():
-    # 認証
     creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive'])
     client = gspread.authorize(creds)
     
-    # シート取得
     spreadsheet = client.open("Hermes_Check_List")
     sheet_master = spreadsheet.get_worksheet(0)
-    
-    try:
-        sheet_today = spreadsheet.worksheet("Today_New")
-    except gspread.WorksheetNotFound:
-        sheet_today = spreadsheet.add_worksheet(title="Today_New", rows="100", cols="20")
+    try: sheet_today = spreadsheet.worksheet("Today_New")
+    except: sheet_today = spreadsheet.add_worksheet(title="Today_New", rows="100", cols="20")
     
     JST = timezone(timedelta(hours=+9), 'JST')
     today_date = datetime.now(JST).strftime("%Y/%m/%d")
     header = ["追加日", "ジャンル", "国", "品番", "商品名", "現地価格", "日本円目安", "URL"]
     
-    all_data = sheet_master.get_all_values()
-    if not all_data:
+    # 既存SKUのロード
+    all_rows = sheet_master.get_all_values()
+    if not all_rows:
         sheet_master.append_row(header)
         existing_skus = set()
-    else:
-        existing_skus = {row[3] for row in all_data if len(row) > 3}
+    else: existing_skus = {row[3] for row in all_rows if len(row) > 3}
 
-    # 今日の新着をリセット
     sheet_today.clear()
     sheet_today.append_row(header)
 
@@ -210,44 +196,40 @@ async def run():
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1920, "height": 1080},
+            viewport={"width": 1280, "height": 1080},
             locale="ja-JP"
         )
         page = await context.new_page()
         try: await playwright_stealth.stealth_async(page)
         except: pass
 
+        # 各カテゴリー × 各国 の総当たり調査
         for cat_name, path_jp in CONFIG["JP"]["paths"].items():
-            print(f"\n【調査開始】: {cat_name}")
-            jp_inventory = await scrape_hermes(page, CONFIG["JP"]["code"], path_jp)
+            print(f"\n--- 調査ジャンル: {cat_name} ---")
+            jp_inv = await scrape_hermes(page, CONFIG["JP"]["code"], path_jp)
             
-            for country_key in ["FR", "HK", "US", "KR"]:
-                print(f" -> {country_key} スキャン中...")
-                path_overseas = CONFIG[country_key]["paths"].get(cat_name)
-                if not path_overseas: continue
+            for country in ["FR", "HK", "US", "KR"]:
+                print(f"  [{country}] スキャン中...")
+                path_os = CONFIG[country]["paths"].get(cat_name)
+                if not path_os: continue
                 
-                overseas_inventory = await scrape_hermes(page, CONFIG[country_key]["code"], path_overseas)
+                os_inv = await scrape_hermes(page, CONFIG[country]["code"], path_os)
                 
-                new_rows = []
-                for sku, data in overseas_inventory.items():
-                    if sku not in jp_inventory and sku not in existing_skus:
-                        jpy_price = convert_price_to_jpy(data['price'], country_key)
-                        row = [today_date, cat_name, country_key, sku, data['name'], data['price'], f"¥{jpy_price:,}", data['url']]
-                        new_rows.append(row)
+                to_append = []
+                for sku, data in os_inv.items():
+                    if sku not in jp_inv and sku not in existing_skus:
+                        jpy = convert_price_to_jpy(data['price'], country)
+                        to_append.append([today_date, cat_name, country, sku, data['name'], data['price'], f"¥{jpy:,}", data['url']])
                         existing_skus.add(sku)
                 
-                if new_rows:
-                    print(f"    ☆ 新規 {len(new_rows)}件。シートへ書き込み中...")
-                    # マスターと今日、両方にリトライ機能付きで書き込み
-                    success_master = await safe_append_rows(sheet_master, new_rows)
-                    success_today = await safe_append_rows(sheet_today, new_rows)
-                    
-                    if not success_master or not success_today:
-                        print(f"    [!] 一部の書き込みに最終的に失敗しました。ログを確認してください。")
+                if to_append:
+                    print(f"    ☆ {len(to_append)}件の新規発見。書き込みと検証を開始...")
+                    await verify_and_append_rows(sheet_master, to_append)
+                    await verify_and_append_rows(sheet_today, to_append)
                 
-                await asyncio.sleep(5)
-            await asyncio.sleep(7)
-        
+                await asyncio.sleep(3) # API負荷軽減
+            await asyncio.sleep(5)
+            
         await browser.close()
 
 if __name__ == "__main__":
