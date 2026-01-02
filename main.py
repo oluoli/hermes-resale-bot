@@ -200,7 +200,7 @@ async def run():
         sheet_master.append_row(header)
         existing_skus = set()
     else:
-        existing_skus = {row[5] for row in all_data if len(row) > 5}
+        existing_skus = {row[3] for row in all_data if len(row) > 3}
 
     # 今日の新着をリセット
     sheet_today.clear()
