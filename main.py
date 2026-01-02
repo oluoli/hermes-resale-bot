@@ -23,7 +23,7 @@ CONFIG = {
         "Jewelry": "bijouterie/bijoux-en-or",
         "Blankets": "maison/textiles",
         "Baby": "cadeaux-et-petit-h/cadeaux-de-naissance",
-        "Pets": "maison-plein-air-et-equitation/equitation-et-chien/chien/",
+        "Pets": "maison-plein-air-et-equitation/equitation-et-chien/chien",
         "PetitH": "petit-h",
         "Bags": "femme/sacs-et-petite-maroquinerie/sacs-et-pochettes",
         "Men_bag": "homme/sacs-et-petite-maroquinerie/sacs",
