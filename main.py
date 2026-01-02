@@ -3,7 +3,8 @@ import os
 import json
 import gspread
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+# ここを修正：stealth_async ではなく stealth にしました
+from playwright_stealth import stealth
 from oauth2client.service_account import ServiceAccountCredentials
 
 # 競合が少ないジャンルを狙い撃ち
@@ -21,7 +22,7 @@ async def scrape_hermes(page, country_path, category_path):
     try:
         await page.goto(url, wait_until="networkidle")
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        await asyncio.sleep(4) # 少し待機
+        await asyncio.sleep(4)
         
         items = await page.query_selector_all(".product-item")
         for item in items:
@@ -30,7 +31,7 @@ async def scrape_hermes(page, country_path, category_path):
             if name_el and link_el:
                 name = (await name_el.inner_text()).strip()
                 link = await link_el.get_attribute("href")
-                sku = link.split('/')[-1].replace('.html', '') # URLから品番を抜き出す
+                sku = link.split('/')[-1].replace('.html', '')
                 products[sku] = {"name": name, "url": f"https://www.hermes.com{link}"}
     except:
         pass
@@ -41,7 +42,7 @@ async def run():
     creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive'])
     client = gspread.authorize(creds)
-    sheet = client.open("Hermes_Check_List").sheet1 # スプレッドシートの名前
+    sheet = client.open("Hermes_Check_List").sheet1
     
     sheet.clear()
     sheet.append_row(["ジャンル", "国", "品番", "商品名", "URL"])
@@ -49,16 +50,17 @@ async def run():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
-        await stealth_async(page)
+        # ここも修正：await stealth(page) に変更しました
+        await stealth(page)
 
         for cat, path in CATEGORIES.items():
             print(f"調査中: {cat}")
-            jp_list = await scrape_hermes(page, "jp/ja", path) # 日本の在庫
+            jp_list = await scrape_hermes(page, "jp/ja", path)
             
-            for country in ["fr/fr", "hk/en", "us/en"]: # 海外を巡回
+            for country in ["fr/fr", "hk/en", "us/en"]:
                 overseas_list = await scrape_hermes(page, country, path)
                 for sku, data in overseas_list.items():
-                    if sku not in jp_list: # 日本になければスプレッドシートへ
+                    if sku not in jp_list:
                         sheet.append_row([cat, country[:2].upper(), sku, data['name'], data['url']])
         
         await browser.close()
