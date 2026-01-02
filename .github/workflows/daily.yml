@@ -1,8 +1,8 @@
 name: Hermes Bot Daily Run
 on:
   schedule:
-    - cron: '0 21 * * *' # 日本時間の朝6時に毎日実行
-  workflow_dispatch: # 手動でも動かせるようにするボタン
+    - cron: '0 21 * * *'
+  workflow_dispatch:
 
 jobs:
   run-bot:
@@ -16,6 +16,7 @@ jobs:
         run: |
           pip install playwright playwright-stealth gspread oauth2client
           playwright install chromium
+          playwright install-deps chromium
       - name: Run
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
