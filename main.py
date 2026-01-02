@@ -7,24 +7,27 @@ from playwright.async_api import async_playwright
 import playwright_stealth
 from oauth2client.service_account import ServiceAccountCredentials
 
-# 国ごとに異なるカテゴリーパスを設定（ここが重要です！）
-# 1人運営の効率化のため、需要の高い「日本未入荷」が出やすいジャンルを厳選しています。
+# 国ごとに異なる正確なカテゴリーパスを定義
 CONFIG = {
     "JP": {"code": "jp/ja", "paths": {
         "Jewelry": "jewelry/gold-jewelry",
         "Blankets": "home/blankets-and-pillows",
         "Baby": "baby",
         "Pets": "home/equestrian-and-dog",
-        "PetitH": "petit-h/all-petit-h", # 日本にはほぼない
-        "Bags": "bags-and-small-leather-goods/bags-and-clutches"
+        "PetitH": "petit-h/all-petit-h",
+        "Bags": "women/bags-and-small-leather-goods/bags-and-clutches",
+        "Men_Accessories": "men/accessories",
+        "Tableware": "home/tableware"
     }},
     "FR": {"code": "fr/fr", "paths": {
         "Jewelry": "bijouterie/bijoux-en-or",
         "Blankets": "maison/couvertures-et-oreillers",
-        "Baby": "bebe",
-        "Pets": "maison/equitation-et-chien",
+        "Baby": "enfant/bebe",
+        "Pets": "maison-plein-air-et-equitation/equitation-et-chien",
         "PetitH": "petit-h",
-        "Bags": "sacs-et-petite-maroquinerie/sacs-et-pochettes"
+        "Bags": "femme/sacs-et-petite-maroquinerie/sacs-et-pochettes",
+        "Men_Accessories": "homme/accessoires",
+        "Tableware": "maison/art-de-la-table"
     }},
     "HK": {"code": "hk/en", "paths": {
         "Jewelry": "jewelry/gold-jewelry",
@@ -32,7 +35,9 @@ CONFIG = {
         "Baby": "baby",
         "Pets": "home/equestrian-and-dog",
         "PetitH": "petit-h",
-        "Bags": "bags-and-small-leather-goods/bags-and-clutches"
+        "Bags": "women/bags-and-small-leather-goods/bags-and-clutches",
+        "Men_Accessories": "men/accessories",
+        "Tableware": "home/tableware"
     }},
     "US": {"code": "us/en", "paths": {
         "Jewelry": "jewelry/gold-jewelry",
@@ -40,7 +45,9 @@ CONFIG = {
         "Baby": "baby",
         "Pets": "home/equestrian-and-dog",
         "PetitH": "petit-h",
-        "Bags": "bags-and-small-leather-goods/bags-and-clutches"
+        "Bags": "women/bags-and-small-leather-goods/bags-and-clutches",
+        "Men_Accessories": "men/accessories",
+        "Tableware": "home/tableware"
     }}
 }
 
@@ -48,12 +55,13 @@ async def scrape_hermes(page, country_code, category_path):
     url = f"https://www.hermes.com/{country_code}/category/{category_path}/#|"
     products = {}
     try:
-        await page.goto(url, wait_until="load", timeout=90000)
+        # networkidleを使用してJSの読み込みを待つ
+        await page.goto(url, wait_until="networkidle", timeout=120000)
         await asyncio.sleep(5)
         
-        # 確実に全商品を表示させるためのスクロール
-        for _ in range(3):
-            await page.mouse.wheel(0, 2000)
+        # 確実に全商品を表示させるための段階的スクロール
+        for _ in range(5):
+            await page.mouse.wheel(0, 1500)
             await asyncio.sleep(2)
 
         items = await page.query_selector_all(".product-item")
@@ -69,7 +77,7 @@ async def scrape_hermes(page, country_code, category_path):
                 sku = sku_match.group(0) if sku_match else name
                 products[sku] = {"name": name, "url": f"https://www.hermes.com{link}"}
     except Exception as e:
-        print(f"   × エラー ({country_code}): {e}")
+        print(f"   × エラー ({country_code} / {category_path}): {e}")
     return products
 
 async def run():
@@ -83,22 +91,27 @@ async def run():
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080}
+        )
         page = await context.new_page()
         try: await playwright_stealth.stealth_async(page)
         except: pass
 
-        # ジャンルごとに調査
         for cat_name in CONFIG["JP"]["paths"].keys():
-            print(f"\n【カテゴリー調査中】: {cat_name}")
+            print(f"\n【調査中】: {cat_name}")
             
             # 1. 日本の在庫を確認
             jp_inventory = await scrape_hermes(page, CONFIG["JP"]["code"], CONFIG["JP"]["paths"][cat_name])
             
             # 2. 海外各国の在庫と比較
             for country_key in ["FR", "HK", "US"]:
-                print(f" -> {country_key} をチェック中...")
-                overseas_inventory = await scrape_hermes(page, CONFIG[country_key]["code"], CONFIG[country_key]["paths"][cat_name])
+                print(f" -> {country_key} をスキャン...")
+                path = CONFIG[country_key]["paths"].get(cat_name)
+                if not path: continue
+                
+                overseas_inventory = await scrape_hermes(page, CONFIG[country_key]["code"], path)
                 
                 new_items = []
                 for sku, data in overseas_inventory.items():
@@ -107,7 +120,10 @@ async def run():
                 
                 if new_items:
                     sheet.append_rows(new_items)
-                    print(f"    ☆ {len(new_items)}件の日本未入荷品を保存しました")
+                    print(f"    ☆ {len(new_items)}件追加")
+                
+                await asyncio.sleep(5) # 国ごとに休憩
+            await asyncio.sleep(8) # カテゴリーごとに休憩
         
         await browser.close()
 
