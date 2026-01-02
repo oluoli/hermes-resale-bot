@@ -3,7 +3,8 @@ import os
 import json
 import gspread
 import re
-from datetime import datetime
+# 日本時間対応のためのインポート
+from datetime import datetime, timedelta, timezone
 from playwright.async_api import async_playwright
 import playwright_stealth
 from oauth2client.service_account import ServiceAccountCredentials
@@ -32,7 +33,6 @@ CONFIG = {
         "バッグ": "women/bags-and-small-leather-goods/bags-and-clutches",
         "メンズバッグ": "men/bags-and-small-leather-goods/bags",
         "テーブルウェア": "home/tableware"
-        
     }},
     "FR": {"code": "fr/fr", "paths": {
         "ゴールドジュエリー": "bijouterie/bijoux-en-or",
@@ -83,7 +83,7 @@ CONFIG = {
         "テーブルウェア": "home/tableware"
     }},
     "KR": {"code": "kr/ko", "paths": {
- "ゴールドジュエリー": "jewelry/gold-jewelry",
+        "ゴールドジュエリー": "jewelry/gold-jewelry",
         "ブレスレット": "women/fashion-jewelry/bracelets",
         "ネックレス": "women/fashion-jewelry/necklaces-and-pendants",
         "耳飾り": "women/fashion-jewelry/earrings",
@@ -94,9 +94,9 @@ CONFIG = {
         "ベビーギフト": "gifts-and-petit-h/baby-gifts",
         "ペット": "home-outdoor-and-equestrian/equestrian-and-dogs/dog",
         "PetitH": "petit-h",
-        "バッグ": "women/bags-and-small-leather-goods/bags-and-clutches",
-        "メンズバッグ": "men/bags-and-small-leather-goods/bags",
-        "テーブルウェア": "home/tableware"
+        "Bags": "women/bags-and-small-leather-goods/bags-and-clutches",
+        "Men_bag": "men/bags-and-small-leather-goods/bags",
+        "Tableware": "home/tableware"
     }}
 }
 
@@ -113,13 +113,24 @@ async def scrape_hermes(page, country_code, category_path):
     url = f"https://www.hermes.com/{country_code}/category/{category_path}/#|"
     products = {}
     try:
-        await page.goto(url, wait_until="networkidle", timeout=120000)
-        await asyncio.sleep(5)
-        for _ in range(5):
+        # networkidleを待つが、最大120秒でタイムアウト
+        await page.goto(url, wait_until="load", timeout=120000)
+        
+        # 【重要】商品アイテムが表示されるまで最大30秒待機
+        try:
+            await page.wait_for_selector(".product-item", timeout=30000)
+        except:
+            print(f"   [!] 商品が見つかりません (スキップ): {url}")
+            return {}
+
+        # 段階的にスクロールしてLazy Loadを解消
+        for _ in range(6):
             await page.mouse.wheel(0, 1500)
-            await asyncio.sleep(2)
+            await asyncio.sleep(2.5) # 読み込み待ち時間を少し長めに
 
         items = await page.query_selector_all(".product-item")
+        print(f"   -> {country_code}: {len(items)}個検知")
+
         for item in items:
             name_el = await item.query_selector(".product-item-name")
             price_el = await item.query_selector(".product-item-price")
@@ -132,7 +143,7 @@ async def scrape_hermes(page, country_code, category_path):
                 sku = sku_match.group(0) if sku_match else name
                 products[sku] = {"name": name, "price": price_text, "url": f"https://www.hermes.com{link}"}
     except Exception as e:
-        print(f"   × エラー ({country_code} / {category_path}): {e}")
+        print(f"   × エラー発生 ({country_code} / {category_path}): {e}")
     return products
 
 async def run():
@@ -140,30 +151,27 @@ async def run():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive'])
     client = gspread.authorize(creds)
     
-    # スプレッドシートを開く
     spreadsheet = client.open("Hermes_Check_List")
-    sheet_master = spreadsheet.get_worksheet(0) # 1枚目のシート（全履歴用）
+    sheet_master = spreadsheet.get_worksheet(0)
     
-    # --- 「本日の新着」用シートの準備 ---
     try:
         sheet_today = spreadsheet.worksheet("Today_New")
     except gspread.WorksheetNotFound:
         sheet_today = spreadsheet.add_worksheet(title="Today_New", rows="100", cols="20")
     
-    # 今日の日付を取得
-    today_date = datetime.now().strftime("%Y/%m/%d")
+    # 日本時間 (JST) の取得
+    JST = timezone(timedelta(hours=+9), 'JST')
+    today_date = datetime.now(JST).strftime("%Y/%m/%d")
+    
     header = ["追加日", "ジャンル", "国", "品番", "商品名", "現地価格", "日本円目安", "URL"]
     
-    # マスターシートの準備
     all_data = sheet_master.get_all_values()
     if not all_data:
         sheet_master.append_row(header)
         existing_skus = set()
     else:
-        # 4列目(インデックス3)が品番
-        existing_skus = {row[3] for row in all_data}
+        existing_skus = {row[3] for row in all_data if len(row) > 3}
 
-    # 今日の新着シートをリセット
     sheet_today.clear()
     sheet_today.append_row(header)
 
@@ -177,16 +185,16 @@ async def run():
         try: await playwright_stealth.stealth_async(page)
         except: pass
 
-        for cat_name in CONFIG["JP"]["paths"].keys():
-            print(f"\n【調査中】: {cat_name}")
-            jp_inventory = await scrape_hermes(page, CONFIG["JP"]["code"], CONFIG["JP"]["paths"][cat_name])
+        for cat_name, path_jp in CONFIG["JP"]["paths"].items():
+            print(f"\n【調査開始】: {cat_name}")
+            jp_inventory = await scrape_hermes(page, CONFIG["JP"]["code"], path_jp)
             
             for country_key in ["FR", "HK", "US", "KR"]:
-                print(f" -> {country_key} をスキャン...")
-                path = CONFIG[country_key]["paths"].get(cat_name)
-                if not path: continue
+                print(f" -> {country_key} スキャン中...")
+                path_overseas = CONFIG[country_key]["paths"].get(cat_name)
+                if not path_overseas: continue
                 
-                overseas_inventory = await scrape_hermes(page, CONFIG[country_key]["code"], path)
+                overseas_inventory = await scrape_hermes(page, CONFIG[country_key]["code"], path_overseas)
                 
                 new_rows = []
                 for sku, data in overseas_inventory.items():
@@ -197,13 +205,12 @@ async def run():
                         existing_skus.add(sku)
                 
                 if new_rows:
-                    # マスターと今日の新着、両方に書き込む
                     sheet_master.append_rows(new_rows)
                     sheet_today.append_rows(new_rows)
                     print(f"    ☆ {len(new_rows)}件の新規アイテムを保存しました")
                 
-                await asyncio.sleep(5)
-            await asyncio.sleep(8)
+                await asyncio.sleep(4)
+            await asyncio.sleep(6)
         
         await browser.close()
 
