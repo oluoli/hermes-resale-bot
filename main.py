@@ -3,20 +3,19 @@ import os
 import json
 import gspread
 import re
-import requests
+from datetime import datetime
 from playwright.async_api import async_playwright
 import playwright_stealth
 from oauth2client.service_account import ServiceAccountCredentials
 
-# --- 設定：為替レート（適宜更新してください） ---
+# --- 設定：為替レート ---
 EXCHANGE_RATES = {
-    "FR": 165.0,  # EUR/JPY
-    "HK": 20.0,   # HKD/JPY
-    "US": 155.0,  # USD/JPY
-    "KR": 0.11    # KRW/JPY
+    "FR": 165.0,
+    "HK": 20.0,
+    "US": 155.0,
+    "KR": 0.11
 }
 
-# カテゴリーパス設定（ユーザー様の調整済み版を反映）
 CONFIG = {
     "JP": {"code": "jp/ja", "paths": {
         "Jewelry": "jewelry/gold-jewelry",
@@ -58,7 +57,7 @@ CONFIG = {
         "Men_bag": "men/bags-and-small-leather-goods/bags",
         "Tableware": "home/tableware"
     }},
-    "KR": {"code": "kr/ko", "paths": { # KRのコードをkr/koに修正
+    "KR": {"code": "kr/ko", "paths": {
         "Jewelry": "jewelry/gold-jewelry",
         "Blankets": "home/textiles",
         "Baby": "gifts-and-petit-h/baby-gifts",
@@ -70,17 +69,8 @@ CONFIG = {
     }}
 }
 
-def send_line_notify(message):
-    line_token = os.environ.get("LINE_NOTIFY_TOKEN")
-    if not line_token:
-        return
-    endpoint = "https://notify-api.line.me/api/notify"
-    headers = {"Authorization": f"Bearer {line_token}"}
-    requests.post(endpoint, headers=headers, data={"message": message})
-
 def convert_price_to_jpy(price_str, country_key):
     try:
-        # 数字とドット以外を削除
         num_str = re.sub(r'[^\d.]', '', price_str.replace(',', ''))
         price_num = float(num_str)
         rate = EXCHANGE_RATES.get(country_key, 1.0)
@@ -101,7 +91,7 @@ async def scrape_hermes(page, country_code, category_path):
         items = await page.query_selector_all(".product-item")
         for item in items:
             name_el = await item.query_selector(".product-item-name")
-            price_el = await item.query_selector(".product-item-price") # 価格要素取得追加
+            price_el = await item.query_selector(".product-item-price")
             link_el = await item.query_selector("a")
             if name_el and link_el:
                 name = (await name_el.inner_text()).strip()
@@ -118,18 +108,33 @@ async def run():
     creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive'])
     client = gspread.authorize(creds)
-    sheet = client.open("Hermes_Check_List").sheet1
     
-    # --- 新機能：既存の品番(SKU)を取得 ---
-    all_data = sheet.get_all_values()
+    # スプレッドシートを開く
+    spreadsheet = client.open("Hermes_Check_List")
+    sheet_master = spreadsheet.get_worksheet(0) # 1枚目のシート（全履歴用）
+    
+    # --- 「本日の新着」用シートの準備 ---
+    try:
+        sheet_today = spreadsheet.worksheet("Today_New")
+    except gspread.WorksheetNotFound:
+        sheet_today = spreadsheet.add_worksheet(title="Today_New", rows="100", cols="20")
+    
+    # 今日の日付を取得
+    today_date = datetime.now().strftime("%Y/%m/%d")
+    header = ["追加日", "ジャンル", "国", "品番", "商品名", "現地価格", "日本円目安", "URL"]
+    
+    # マスターシートの準備
+    all_data = sheet_master.get_all_values()
     if not all_data:
-        sheet.append_row(["ジャンル", "国", "品番", "商品名", "現地価格", "日本円目安", "URL"])
+        sheet_master.append_row(header)
         existing_skus = set()
     else:
-        # 3列目(インデックス2)が品番
-        existing_skus = {row[2] for row in all_data}
+        # 4列目(インデックス3)が品番
+        existing_skus = {row[3] for row in all_data}
 
-    new_items_to_notify = []
+    # 今日の新着シートをリセット
+    sheet_today.clear()
+    sheet_today.append_row(header)
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -152,31 +157,24 @@ async def run():
                 
                 overseas_inventory = await scrape_hermes(page, CONFIG[country_key]["code"], path)
                 
-                rows_to_append = []
+                new_rows = []
                 for sku, data in overseas_inventory.items():
-                    # 日本になく、かつシートにまだ登録されていないもの
                     if sku not in jp_inventory and sku not in existing_skus:
                         jpy_price = convert_price_to_jpy(data['price'], country_key)
-                        row = [cat_name, country_key, sku, data['name'], data['price'], f"¥{jpy_price:,}", data['url']]
-                        rows_to_append.append(row)
-                        new_items_to_notify.append(f"【{cat_name}】{data['name']} ({country_key}) ¥{jpy_price:,}")
-                        existing_skus.add(sku) # 同じ実行内での重複回避
+                        row = [today_date, cat_name, country_key, sku, data['name'], data['price'], f"¥{jpy_price:,}", data['url']]
+                        new_rows.append(row)
+                        existing_skus.add(sku)
                 
-                if rows_to_append:
-                    sheet.append_rows(rows_to_append)
-                    print(f"    ☆ {len(rows_to_append)}件の新規アイテムを追加")
+                if new_rows:
+                    # マスターと今日の新着、両方に書き込む
+                    sheet_master.append_rows(new_rows)
+                    sheet_today.append_rows(new_rows)
+                    print(f"    ☆ {len(new_rows)}件の新規アイテムを保存しました")
                 
                 await asyncio.sleep(5)
             await asyncio.sleep(8)
         
         await browser.close()
-
-    # --- 新機能：LINE通知 ---
-    if new_items_to_notify:
-        msg = "\n🌟エルメス新着未入荷情報🌟\n" + "\n".join(new_items_to_notify[:15]) # 通知が長すぎないよう制限
-        if len(new_items_to_notify) > 15:
-            msg += f"\n他 {len(new_items_to_notify)-15} 件の新着あり"
-        send_line_notify(msg)
 
 if __name__ == "__main__":
     asyncio.run(run())
