@@ -7,7 +7,8 @@ import time
 import random
 from datetime import datetime, timedelta, timezone
 from playwright.async_api import async_playwright
-import playwright_stealth
+# インポート方法を変更してエラーを回避
+from playwright_stealth import stealth_async
 from oauth2client.service_account import ServiceAccountCredentials
 
 # --- 設定：最新の為替レート (2026年想定) ---
@@ -18,7 +19,7 @@ EXCHANGE_RATES = {
     "KR": 0.11    # KRW
 }
 
-# --- カテゴリー設定 (JPのパスを基準に海外も自動追従) ---
+# --- カテゴリー設定 (全パス省略なし) ---
 CONFIG = {
     "JP": {"code": "jp/ja", "paths": {
         "ゴールドジュエリー": "jewelry/gold-jewelry",
@@ -102,11 +103,11 @@ CONFIG = {
     }}
 }
 
-# --- 職人の呼吸 (ランダムな待機で人間らしさを演出) ---
+# --- 職人の呼吸 (ランダムな待機でボット検知を回避) ---
 async def artisan_wait(min_sec=4, max_sec=10):
     await asyncio.sleep(random.uniform(min_sec, max_sec))
 
-# --- 商品詳細（画像URL、価格、品番）の高度な抽出 ---
+# --- 商品詳細（画像URL、価格、品番）の抽出 ---
 async def extract_item_details(item):
     try:
         name_el = await item.query_selector(".product-item-name")
@@ -121,11 +122,11 @@ async def extract_item_details(item):
         link = await link_el.get_attribute("href")
         full_url = f"https://www.hermes.com{link}"
         
-        # 品番抽出
+        # 品番抽出: URL内の H で始まるコードを探す。なければ名前にする。
         sku_match = re.search(r'H[A-Z0-9]{5,}', link)
         sku = sku_match.group(0).upper().strip() if sku_match else name.upper().strip()
         
-        # 画像URL取得
+        # 画像URL取得 (遅延読み込み data-src にも対応)
         img_src = await img_el.get_attribute("src") or await img_el.get_attribute("data-src")
         if img_src and img_src.startswith("//"):
             img_src = "https:" + img_src
@@ -136,24 +137,25 @@ async def extract_item_details(item):
 
 # --- BUYMAでの実在確認（隠密リサーチ版） ---
 async def check_buyma_unlisted(page, sku):
-    """BUYMAで検索して、掲載が1件もなければTrueを返す。ブロックされたら安全のためFalse"""
+    """BUYMAで検索して、商品リストが存在しなければTrueを返す"""
     search_url = f"https://www.buyma.com/r/-F1/{sku}/"
     try:
         print(f"        [BUYMA照合] 品番 {sku} を鑑定中...")
         response = await page.goto(search_url, wait_until="networkidle", timeout=60000)
         
+        # BUYMAからブロック(403等)された場合は安全のため「掲載あり」とみなしてスルー
         if response.status != 200:
-            print(f"        [!] BUYMAが混み合っています(Status:{response.status})。判定を保留します。")
+            print(f"        [!] BUYMA混雑中(Status:{response.status})。判定を保留します。")
             return False
 
-        await artisan_wait(4, 7)
+        await artisan_wait(3, 6)
         
         content = await page.content()
         product_count = await page.locator(".fab-product-img").count()
         no_result = "該当する商品が見つかりませんでした" in content
 
         if product_count == 0 or no_result:
-            print(f"        [☆お宝発見] BUYMA未掲載を確認！")
+            print(f"        [☆お宝] BUYMA未掲載を確認しました！")
             return True
         else:
             print(f"        [既出] BUYMAで {product_count} 件の出品があります。")
@@ -168,19 +170,20 @@ async def artisan_write_and_verify(sheet, row_data, max_retry=5):
     for attempt in range(max_retry):
         try:
             await artisan_wait(3, 6)
+            # 数式(IMAGE関数)を維持するために USER_ENTERED を指定
             sheet.append_row(row_data, value_input_option='USER_ENTERED')
             
-            # Googleの同期を待つ「呼吸」
-            await asyncio.sleep(12) 
+            # Google側の同期をじっくり待つ
+            await asyncio.sleep(15) 
 
-            # API負荷を避け、最後から15行だけを取得して物理確認
-            last_rows = sheet.get_all_values()[-15:]
+            # API負荷を避け、最後から20行だけを取得して物理確認
+            last_rows = sheet.get_all_values()[-20:]
             if any(sku_to_check == str(r[3]).upper().strip() for r in last_rows if len(r) > 3):
                 return True
-            print(f"        [!] 記入が反映されていません。再送します({attempt+1})")
+            print(f"        [!] 記入未反映。再送します({attempt+1})")
         except Exception as e:
             wait_time = (attempt + 1) * 60
-            print(f"        [API制限] Googleが休息を求めています。{wait_time}秒停止します... ({e})")
+            print(f"        [API制限] Googleが休憩を求めています。{wait_time}秒停止します... ({e})")
             await asyncio.sleep(wait_time)
     return False
 
@@ -193,8 +196,10 @@ async def artisan_scroll(page):
         if current_count > 0 and current_count == last_count:
             break
         last_count = current_count
+        # 人間らしくランダムな量でスクロール
         await page.mouse.wheel(0, 800 + random.randint(0, 300))
-        await asyncio.sleep(2.5)
+        await asyncio.sleep(2)
+        # 最下部まで一度飛ばしてLazy Loadを刺激
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await asyncio.sleep(2)
 
@@ -219,7 +224,7 @@ async def scrape_hermes_artisan(page, country_code, category_path, is_jp=False):
                 if details:
                     products[details["sku"]] = details
             
-            print(f"    [完了] {country_code}: {len(products)}件の商品を正確に把握")
+            print(f"    [完了] {country_code}: {len(products)}個の商品を正確に把握")
             return products
         except:
             await asyncio.sleep(10)
@@ -237,7 +242,7 @@ async def run():
     for title in ["Master", "Today_New", "BUYMA_Unlisted"]:
         try: sheets[title] = spreadsheet.worksheet(title)
         except:
-            sheets[title] = spreadsheet.add_worksheet(title=title, rows="1000", cols="20")
+            sheets[title] = spreadsheet.add_worksheet(title=title, rows="2000", cols="20")
             sheets[title].append_row(["追加日", "ジャンル", "国", "品番", "商品名", "現地価格", "円目安", "画像", "URL"])
 
     JST = timezone(timedelta(hours=+9), 'JST')
@@ -253,7 +258,6 @@ async def run():
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        # 高品質な環境エミュレート
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             viewport={"width": 2560, "height": 1440}
@@ -261,21 +265,23 @@ async def run():
         
         h_page = await context.new_page()
         b_page = await context.new_page()
-        await playwright_stealth.stealth_async(h_page)
-        await playwright_stealth.stealth_async(buyma_page)
+        
+        # エラー修正：stealth_async を正しく呼び出す
+        await stealth_async(h_page)
+        await stealth_async(b_page)
 
         for cat_name, path_jp in CONFIG["JP"]["paths"].items():
-            print(f"\n【職人リサーチ】カテゴリー: {cat_name}")
+            print(f"\n--- 【職人リサーチ】カテゴリー: {cat_name} ---")
             
-            # 1. 日本サイトの「フィルター」を完璧に構築
+            # 1. 日本サイトを完璧にスキャン（フィルター網の構築）
             jp_inv = await scrape_hermes_artisan(h_page, "jp/ja", path_jp, is_jp=True)
             if jp_inv is None:
                 print(f"    [中断] 日本サイト読み込み不可。スキップします。")
                 continue
             
+            # 2. 海外4カ国を巡回
             for country_key in ["FR", "HK", "US", "KR"]:
                 print(f"  [{country_key}] 調査開始...")
-                # 海外のパスもCONFIGから取得
                 target_path = CONFIG[country_key]["paths"].get(cat_name)
                 if not target_path: continue
                 
@@ -285,8 +291,9 @@ async def run():
                 for sku, data in os_inv.items():
                     sku_upper = str(sku).upper().strip()
                     
+                    # 日本に存在せず、かつマスター台帳にも未記載の場合のみ
                     if sku_upper not in jp_inv and sku_upper not in existing_skus:
-                        # BUYMA未掲載チェック
+                        # 3. BUYMA実在確認
                         is_buyma_exclusive = await check_buyma_unlisted(b_page, sku_upper)
                         
                         try:
@@ -294,18 +301,18 @@ async def run():
                             jpy = int(float(num_str) * EXCHANGE_RATES.get(country_key, 1.0))
                         except: jpy = 0
                         
-                        # 画像表示用のGoogle Sheets数式
+                        # 画像表示用の数式
                         img_formula = f'=IMAGE("{data["img"]}")' if data["img"] else "No Image"
                         
                         row = [today_date, cat_name, country_key, sku_upper, data['name'], data['price'], f"¥{jpy:,}", img_formula, data['url']]
                         
-                        print(f"      [台帳記入] {data['name']} を刻んでいます...")
+                        print(f"      [記帳中] {data['name']}")
                         # マスターに記帳し、物理確認
                         if await artisan_write_and_verify(sheets["Master"], row):
-                            # 今日のシートにも記帳
+                            # 今日の新着にも記帳
                             sheets["Today_New"].append_row(row, value_input_option='USER_ENTERED')
                             
-                            # BUYMA未掲載なら「宝物シート」にも記帳
+                            # BUYMA未掲載なら「ブルーオーシャンシート」にも記帳
                             if is_buyma_exclusive:
                                 await artisan_write_and_verify(sheets["BUYMA_Unlisted"], row)
                             
@@ -314,6 +321,8 @@ async def run():
                         await artisan_wait(6, 12)
                 
                 await artisan_wait(15, 30)
+            
+            print(f"--- {cat_name} 完了。APIリセットのために大休憩します。 ---")
             await asyncio.sleep(45)
             
         await browser.close()
