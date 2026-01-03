@@ -7,14 +7,13 @@ import time
 import random
 from datetime import datetime, timedelta, timezone
 from playwright.async_api import async_playwright
-# インポート方法を変更してエラーを回避
-from playwright_stealth import stealth_async
+import playwright_stealth
 from oauth2client.service_account import ServiceAccountCredentials
 
 # --- 設定：最新の為替レート (2026年想定) ---
 EXCHANGE_RATES = {"FR": 166.0, "HK": 20.5, "US": 156.0, "KR": 0.11}
 
-# --- カテゴリー設定 (全5カ国・完全無省略) ---
+# --- カテゴリー設定 (全5カ国・14カテゴリー・一切の省略なし) ---
 CONFIG = {
     "JP": {"code": "jp/ja", "paths": {
         "ゴールドジュエリー": "jewelry/gold-jewelry",
@@ -102,7 +101,7 @@ CONFIG = {
 async def artisan_wait(min_sec=4, max_sec=10):
     await asyncio.sleep(random.uniform(min_sec, max_sec))
 
-# --- 商品詳細の抽出工程 (価格リトライ込) ---
+# --- 商品詳細の抽出工程 (価格リトライロジック込) ---
 async def extract_item_details(item):
     try:
         name_el = await item.query_selector(".product-item-name")
@@ -113,7 +112,7 @@ async def extract_item_details(item):
         
         name = (await name_el.inner_text()).strip()
         
-        # 価格取得の粘り (既存ロジックを継承)
+        # 価格取得の粘り
         price = "0"
         for _ in range(3):
             price_text = await price_el.inner_text() if price_el else "0"
@@ -130,7 +129,7 @@ async def extract_item_details(item):
         return {"sku": sku, "name": name, "price": price, "url": full_url}
     except: return None
 
-# --- BUYMAでの実在確認 (超精密判定) ---
+# --- BUYMAでの実在確認 (超精密・タイトルマッチング版) ---
 async def check_buyma_unlisted_strict(page, sku):
     """一品ごとにバイマへ飛び、おすすめを排除して最新状況を鑑定する"""
     search_url = f"https://www.buyma.com/r/-F1/{sku}/"
@@ -149,7 +148,7 @@ async def check_buyma_unlisted_strict(page, sku):
         # 判定1: ヒットなしメッセージ
         no_result_msg = "該当する商品が見つかりませんでした" in content
 
-        # 判定2: タイトルマッチング (おすすめ商品を弾く既存ロジック)
+        # 判定2: タイトルマッチング (おすすめ商品を弾く)
         titles = await page.locator(".fab-product-name").all_inner_texts()
         sku_hit = any(sku in t.upper().replace(" ", "") for t in titles)
 
@@ -239,10 +238,10 @@ async def run():
         h_page = await context.new_page()
         b_page = await context.new_page()
         
-        # エラー修正：stealth_asyncを直接呼び出す
-        try: await stealth_async(h_page)
+        # エラーを回避する呼び出し方：await playwright_stealth.stealth_async(page)
+        try: await playwright_stealth.stealth_async(h_page)
         except: pass
-        try: await stealth_async(b_page)
+        try: await playwright_stealth.stealth_async(b_page)
         except: pass
 
         for cat_name, path_jp in CONFIG["JP"]["paths"].items():
