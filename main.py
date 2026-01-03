@@ -7,13 +7,14 @@ import time
 import random
 from datetime import datetime, timedelta, timezone
 from playwright.async_api import async_playwright
-import playwright_stealth
+# インポート方法を変更してエラーを回避
+from playwright_stealth import stealth_async
 from oauth2client.service_account import ServiceAccountCredentials
 
 # --- 設定：最新の為替レート (2026年想定) ---
 EXCHANGE_RATES = {"FR": 166.0, "HK": 20.5, "US": 156.0, "KR": 0.11}
 
-# --- カテゴリー設定 (全5カ国・無省略) ---
+# --- カテゴリー設定 (全5カ国・完全無省略) ---
 CONFIG = {
     "JP": {"code": "jp/ja", "paths": {
         "ゴールドジュエリー": "jewelry/gold-jewelry",
@@ -101,7 +102,7 @@ CONFIG = {
 async def artisan_wait(min_sec=4, max_sec=10):
     await asyncio.sleep(random.uniform(min_sec, max_sec))
 
-# --- 商品詳細の高度な抽出 (価格リトライロジック込) ---
+# --- 商品詳細の抽出工程 (価格リトライ込) ---
 async def extract_item_details(item):
     try:
         name_el = await item.query_selector(".product-item-name")
@@ -112,7 +113,7 @@ async def extract_item_details(item):
         
         name = (await name_el.inner_text()).strip()
         
-        # 価格取得の粘り
+        # 価格取得の粘り (既存ロジックを継承)
         price = "0"
         for _ in range(3):
             price_text = await price_el.inner_text() if price_el else "0"
@@ -122,13 +123,14 @@ async def extract_item_details(item):
 
         link = await link_el.get_attribute("href")
         full_url = f"https://www.hermes.com{link}"
+        
         sku_match = re.search(r'H[A-Z0-9]{5,}', link)
         sku = sku_match.group(0).upper().strip() if sku_match else name.upper().strip()
             
         return {"sku": sku, "name": name, "price": price, "url": full_url}
     except: return None
 
-# --- BUYMAでの実在確認 (超精密・タイトルマッチング版) ---
+# --- BUYMAでの実在確認 (超精密判定) ---
 async def check_buyma_unlisted_strict(page, sku):
     """一品ごとにバイマへ飛び、おすすめを排除して最新状況を鑑定する"""
     search_url = f"https://www.buyma.com/r/-F1/{sku}/"
@@ -147,7 +149,7 @@ async def check_buyma_unlisted_strict(page, sku):
         # 判定1: ヒットなしメッセージ
         no_result_msg = "該当する商品が見つかりませんでした" in content
 
-        # 判定2: タイトルマッチング (おすすめ商品を弾く)
+        # 判定2: タイトルマッチング (おすすめ商品を弾く既存ロジック)
         titles = await page.locator(".fab-product-name").all_inner_texts()
         sku_hit = any(sku in t.upper().replace(" ", "") for t in titles)
 
@@ -155,33 +157,31 @@ async def check_buyma_unlisted_strict(page, sku):
             print(f"        [☆未掲載確定] BUYMAにお宝発見！")
             return True
         else:
-            print(f"        [既出] BUYMAに類似・該当商品を検知しました。")
+            print(f"        [既出] バイマに類似・該当商品を検知しました。")
             return False
     except: return False
 
-# --- 1件ずつ記帳し、物理的に確認する職人技 (API負荷・極小版) ---
+# --- 1件ずつ記帳し、物理的に確認する職人技 (API負荷軽減版) ---
 async def artisan_write_and_verify_single(sheet, row_data, max_retry=3):
-    """書き込んだ直後の1行をピンポイントで確認する"""
+    """書き込んだ直後の1行をピンポイントで読み戻し確認する"""
     sku_to_check = str(row_data[3]).upper().strip()
     for attempt in range(max_retry):
         try:
             await artisan_wait(3, 6)
             res = sheet.append_row(row_data)
-            # レスポンスから書き込まれた行番号を取得
-            row_idx = res['updates']['updatedRange'].split('!A')[-1].split(':')[0]
-            
-            await asyncio.sleep(8) 
             # D列(品番)だけを読み取って確認
+            row_idx = res['updates']['updatedRange'].split('!A')[-1].split(':')[0]
+            await asyncio.sleep(8) 
             val = sheet.cell(row_idx, 4).value
             if str(val).upper().strip() == sku_to_check:
                 return True
-            print(f"        [!] 物理反映が確認できません。再試行します({attempt+1})")
+            print(f"        [!] 物理反映が確認できません。再試行({attempt+1})")
         except: 
             print(f"        [API制限待機] 30秒休止...")
             await asyncio.sleep(30)
     return False
 
-# --- 執念のスクロール (全件表示用) ---
+# --- 執念のスクロール ---
 async def artisan_scroll(page):
     last_count = 0
     for _ in range(15):
@@ -224,7 +224,7 @@ async def run():
     JST = timezone(timedelta(hours=+9), 'JST')
     today_date = datetime.now(JST).strftime("%Y/%m/%d")
     
-    # 重複チェック用既存リスト
+    # 重複チェック用既存リスト (Masterの品番列を取得)
     existing_skus = set([str(s).upper().strip() for s in sheets["Master"].col_values(4)])
     sheets["Today_New"].clear()
     sheets["Today_New"].append_row(header)
@@ -238,23 +238,27 @@ async def run():
         
         h_page = await context.new_page()
         b_page = await context.new_page()
-        await playwright_stealth.stealth_async(h_page)
-        await playwright_stealth.stealth_async(b_page)
+        
+        # エラー修正：stealth_asyncを直接呼び出す
+        try: await stealth_async(h_page)
+        except: pass
+        try: await stealth_async(b_page)
+        except: pass
 
         for cat_name, path_jp in CONFIG["JP"]["paths"].items():
             print(f"\n【重要工程】カテゴリー: {cat_name}")
             
-            # 1. 日本サイトをスキャンし、一時の「除外リスト」を完璧に構築
+            # 1. 日本サイトをスキャンし、最新の国内在庫フィルターを構築
             jp_items = await scrape_hermes_listing(h_page, "jp/ja", path_jp, is_jp=True)
             if jp_items is None:
-                print(f"    [注意] 日本サイトの読み取りに失敗。スキップします。")
+                print(f"    [注意] 日本サイト読み取り不可。スキップ。")
                 continue
             
             jp_skus = set()
             for item in jp_items:
                 details = await extract_item_details(item)
                 if details: jp_skus.add(details["sku"])
-            print(f"    [日本フィルタ完了] {len(jp_skus)}件の国内商品を把握しました。")
+            print(f"    [日本フィルタ完了] {len(jp_skus)}件の国内商品を把握。")
 
             # 2. 海外4カ国を巡回
             for country_key in ["FR", "HK", "US", "KR"]:
@@ -289,27 +293,25 @@ async def run():
                     except: jpy = 0
                     row = [today_date, cat_name, country_key, sku_upper, data['name'], data['price'], f"¥{jpy:,}", data['url']]
                     
-                    # 照合3: 記帳・同期工程 (成功の刻印を押すまで次へ行かない)
-                    print(f"        [同期中] 台帳への記帳と物理反映を確認中...")
+                    # 照合3: 記帳・同期工程 (成功を確認するまで次へ行かない)
+                    print(f"        [同期中] 全台帳への記帳と物理反映を確認中...")
                     if await artisan_write_and_verify_single(sheets["Master"], row):
-                        # 今日のシートへ
+                        # 他のシートへ同期
                         sheets["Today_New"].append_row(row)
-                        
-                        # バイマ未掲載ならお宝シートへ
                         if is_unlisted:
                             print(f"        [お宝発見] BUYMA_Unlistedに記帳。")
                             await artisan_write_and_verify_single(sheets["BUYMA_Unlisted"], row)
                         
-                        # ローカルメモリを更新
+                        # ローカルメモリを更新して重複を防ぐ
                         existing_skus.add(sku_upper)
-                        print(f"        [完遂] 成功。次の一品へ移ります。")
+                        print(f"        [完遂] 成功。次の一品へ。")
                     
                     # 一品終わるごとの「職人の余韻（インターバル）」
                     await artisan_wait(6, 12)
 
                 await artisan_wait(15, 30)
             
-            print(f"--- {cat_name} 完了。APIリセットのため大休憩中 ---")
+            print(f"--- {cat_name} 完了。APIリセット休憩中 ---")
             await asyncio.sleep(45)
             
         await browser.close()
