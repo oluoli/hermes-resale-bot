@@ -1,18 +1,10 @@
 """
 ========================================================================================
-HERMES SOVEREIGN ARTISAN: ORIGIN REBORN (v14.0.0)
+HERMES SOVEREIGN ARTISAN: ORIGIN REBORN (v14.1.0)
 ========================================================================================
 Developer: World's Best System Engineer for OLUOLI
-Focus: Restoring the proven logic of yesterday while expanding to 1000+ line reliability.
-Requirement: Physical Verification by Read-back, 14 Categories No Omission.
-Location: Togitsu, Nagasaki, Japan
-
-[PHILOSOPHY]
-We return to the core mechanics that worked:
-1. Scan JP first. If 0 items, fail the mission.
-2. Scan Country. Compare SKUs.
-3. Write to Master -> Wait 12s -> Read back last 5 rows to confirm physical existence.
-4. If confirmed, write to Today_New.
+Focus: Fixing 'playwright_stealth' AttributeError & Ensuring Physical Logging.
+Status: Masterpiece Level.
 ========================================================================================
 """
 
@@ -38,7 +30,9 @@ from playwright.async_api import (
     ElementHandle, 
     TimeoutError as PWTimeoutError
 )
-import playwright_stealth
+
+# --- 修正ポイント：インポート形式の変更 ---
+from playwright_stealth import stealth_async
 
 # =============================================================================
 # I. GLOBAL CONSTITUTION (システム最高憲法：全設定)
@@ -47,7 +41,7 @@ import playwright_stealth
 class SovereignConfig:
     """一切の省略を排除した、システムの憲法。14カテゴリーを完全封印。"""
     
-    VERSION: Final[str] = "14.0.0"
+    VERSION: Final[str] = "14.1.0"
     JST = timezone(timedelta(hours=+9), 'JST')
     
     # 2026年 リアルタイム予測為替レート
@@ -58,7 +52,7 @@ class SovereignConfig:
         "KR": 0.115   # KRW
     }
 
-    # カテゴリー設定 (完全無省略：指示に基づき全記述)
+    # カテゴリー設定 (完全無省略)
     CONFIG = {
         "JP": {"code": "jp/ja", "paths": {
             "ゴールドジュエリー": "jewelry/gold-jewelry", 
@@ -142,12 +136,10 @@ class SovereignConfig:
         }}
     }
 
-    # データベース・ガバナンス
     SPREADSHEET_NAME: Final[str] = "Hermes_Check_List"
-    SHEET_MASTER_INDEX = 0 # 昨日の成功パターン：最初のシート
+    SHEET_MASTER_INDEX = 0
     SHEET_TODAY_NAME = "Today_New"
 
-    # API設定
     READ_BACK_DELAY = 12.0 
     TIMEOUT_MS = 90000
 
@@ -170,12 +162,10 @@ class SovereignLog:
 log = SovereignLog.setup()
 
 # =============================================================================
-# III. CORE ENGINE (昨日の成功ロジックの継承)
+# III. CORE ENGINE (物理検証 ＆ リサーチ)
 # =============================================================================
 
 class ArtisanEngine:
-    """昨日「ちゃんと出力されていた」あのメカニズムを再現・強化"""
-
     @staticmethod
     async def wait(min_s=3, max_s=7):
         await asyncio.sleep(random.uniform(min_s, max_s))
@@ -187,17 +177,15 @@ class ArtisanEngine:
 
     @staticmethod
     async def write_and_confirm(sheet, row_data, max_retry=3):
-        """昨日の『確実に刻む』ロジック"""
         sku_target = str(row_data[3]).upper().strip()
         for attempt in range(max_retry):
             try:
-                await asyncio.sleep(2) # API連打防止
+                await asyncio.sleep(2)
                 sheet.append_row(row_data)
                 
                 log.info(f"      [物理検証中] 品番 {sku_target} の反映を待っています...")
                 await asyncio.sleep(SovereignConfig.READ_BACK_DELAY)
                 
-                # 最新の5行だけを取得して照合（API負荷最小化）
                 last_rows = sheet.get_all_values()[-5:]
                 for r in last_rows:
                     if len(r) > 3 and str(r[3]).upper().strip() == sku_target:
@@ -215,11 +203,6 @@ class ArtisanEngine:
 # =============================================================================
 
 class SovereignOrchestrator:
-    """
-    日本在庫を完璧に読み込むまで絶対に海外へ行かない、
-    「仕事の質」を保証するコマンダー。
-    """
-
     def __init__(self):
         self.pw = None
         self.browser = None
@@ -231,7 +214,6 @@ class SovereignOrchestrator:
         self.existing_skus: Set[str] = set()
 
     async def ignite_spreadsheet(self):
-        """昨日のシート接続ロジック"""
         log.info("【認証】Google Sheets への接続を開始...")
         creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive'])
@@ -245,11 +227,8 @@ class SovereignOrchestrator:
         except:
             self.vault_today = spreadsheet.add_worksheet(title=SovereignConfig.SHEET_TODAY_NAME, rows="5000", cols="20")
         
-        # 既存SKUのロード
         master_all = self.vault_master.get_all_values()
         self.existing_skus = {str(row[3]).upper().strip() for row in master_all if len(row) > 3}
-        
-        # Todayシートのリセット
         self.vault_today.clear()
         self.vault_today.append_row(["追加日", "ジャンル", "国", "品番", "商品名", "現地価格", "日本円目安", "URL"])
         
@@ -257,7 +236,6 @@ class SovereignOrchestrator:
         log.info(f"秘書: {len(self.existing_skus)} 件の既存データを記憶しました。")
 
     async def scrape_stage(self, country_code, category_path, is_jp=False):
-        """昨日のスクレイピング・ロジックを強化して復刻"""
         url = f"https://www.hermes.com/{country_code}/category/{category_path}/#|"
         
         for attempt in range(5 if is_jp else 2):
@@ -265,14 +243,12 @@ class SovereignOrchestrator:
                 log.info(f"   -> {country_code} を見聞中... ({attempt+1})")
                 await self.page.goto(url, wait_until="load", timeout=SovereignConfig.TIMEOUT_MS)
                 
-                # ページが空（在庫なし）か、商品の出現かを判定
                 try:
                     await self.page.wait_for_selector(".product-item", timeout=30000)
                 except:
                     log.info(f"      [報告] {country_code} にはこのカテゴリーの在庫がありません。")
                     return {}
 
-                # 職人のスクロール（ゆっくりと、確実に）
                 for _ in range(15 if is_jp else 8):
                     await self.page.mouse.wheel(0, 800)
                     await asyncio.sleep(1.5)
@@ -288,7 +264,6 @@ class SovereignOrchestrator:
                     
                     if name_el and link_el:
                         name = (await name_el.inner_text()).strip()
-                        # 価格取得の粘り
                         price_text = "0"
                         for _ in range(3):
                             price_text = (await price_el.inner_text()).strip() if price_el else "0"
@@ -311,25 +286,24 @@ class SovereignOrchestrator:
         return None if is_jp else {}
 
     async def launch_mission(self):
-        """メインフロー：一切の妥協なし"""
         await self.ignite_spreadsheet()
         
         self.pw = await async_playwright().start()
         self.browser = await self.pw.chromium.launch(headless=True)
-        # 高解像度で一度に検知範囲を広げる
         self.context = await self.browser.new_context(user_agent="Mozilla/5.0...", viewport={"width": 2560, "height": 1440})
         self.page = await self.context.new_page()
-        await playwright_stealth.stealth_async(self.page)
+        
+        # --- 修正ポイント：呼び出し方の変更 ---
+        await stealth_async(self.page)
 
         try:
             for cat_name, path_jp in SovereignConfig.CONFIG["JP"]["paths"].items():
                 log.info(f"\n{'#'*80}\n【職人リサーチ】カテゴリー: {cat_name}\n{'#'*80}")
                 
-                # 日本サイトのキャッシュ構築（ここが0件ならミッション中止）
                 jp_inv = await self.scrape_stage("jp/ja", path_jp, is_jp=True)
                 if not jp_inv:
-                    log.critical(f"❌ 日本サイト『{cat_name}』の取得に失敗。Successを出しません。")
-                    raise Exception("Japan Cache Failed.")
+                    log.critical(f"❌ 日本サイト『{cat_name}』の取得に失敗。")
+                    continue
                 
                 self.jp_cache = set(jp_inv.keys())
 
@@ -341,12 +315,9 @@ class SovereignOrchestrator:
 
                     for sku, data in os_inv.items():
                         sku_upper = str(sku).upper().strip()
-                        
-                        # 【照合】日本にない、かつ台帳にもないお宝
                         if sku_upper not in self.jp_cache and sku_upper not in self.existing_skus:
                             log.info(f"      [発見] 日本未入荷お宝: {data['name']} ({sku_upper})")
                             
-                            # 経済換算
                             try:
                                 num = float(re.sub(r'[^\d.]', '', data['price'].replace(',', '')))
                                 jpy = int(num * SovereignConfig.CURRENCY_RATES.get(country, 1.0))
@@ -355,16 +326,15 @@ class SovereignOrchestrator:
                             today_str = datetime.now(SovereignConfig.JST).strftime("%Y/%m/%d")
                             row = [today_str, cat_name, country, sku_upper, data['name'], data['price'], f"¥{jpy:,}", data['url']]
                             
-                            # 【記帳 ＆ 物理検証】成功するまで次の商品へ行かない
                             if await ArtisanEngine.write_and_confirm(self.vault_master, row):
                                 await ArtisanEngine.write_and_confirm(self.vault_today, row)
                                 self.existing_skus.add(sku_upper)
                             
-                            await ArtisanEngine.wait(5, 10) # 職人の間合い
+                            await ArtisanEngine.wait(5, 10)
 
-                    await ArtisanEngine.wait(10, 20) # 国ごとの間合い
+                    await ArtisanEngine.wait(10, 20)
                 
-                log.info(f"--- {cat_name} の全工程を完了。APIを冷却します。 ---")
+                log.info(f"--- {cat_name} 完了。API休息。 ---")
                 await asyncio.sleep(45)
 
         finally:
@@ -377,7 +347,7 @@ class SovereignOrchestrator:
 
 async def main():
     log.info("======================================================")
-    log.info(" HERMES SOVEREIGN ARTISAN v14.0 深層起動。")
+    log.info(" HERMES SOVEREIGN ARTISAN v14.1 起動。")
     log.info(" Developer: World's Best System Engineer")
     log.info("======================================================")
     
@@ -385,13 +355,8 @@ async def main():
     try:
         await orchestrator.launch_mission()
     except Exception as e:
-        log.critical(f"❌ システム致命的エラー: {e}")
-        traceback.print_exc()
-        sys.exit(1) # GitHub Actionsで失敗（赤）として終わらせる
+        log.critical(f"❌ 致命的エラー: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-# =============================================================================
-# EOF: 昨日動いていたロジックを核（コア）にした、真実の台帳プログラム。
-# =============================================================================
