@@ -97,12 +97,12 @@ CONFIG = {
     }}
 }
 
-# --- 職人の呼吸 ---
-async def artisan_wait(min_sec=4, max_sec=8):
+# --- 職人の待機 ---
+async def artisan_wait(min_sec=4, max_sec=9):
     await asyncio.sleep(random.uniform(min_sec, max_sec))
 
-# --- 商品詳細の精密抽出ロジック ---
-async def extract_details_with_retry(item_el):
+# --- 商品詳細の精密抽出 (リトライ機能込) ---
+async def extract_details_from_el(item_el):
     try:
         await item_el.scroll_into_view_if_needed()
         name_el = await item_el.query_selector(".product-item-name")
@@ -113,9 +113,9 @@ async def extract_details_with_retry(item_el):
         
         name = (await name_el.inner_text()).strip()
         
-        # 価格取得の再試行ロジック (性能重視)
+        # 価格取得リトライ
         price = "0"
-        for _ in range(4):
+        for _ in range(3):
             price_text = await price_el.inner_text() if price_el else "0"
             price = re.sub(r'[^\d.]', '', price_text.replace(',', ''))
             if price and price != "0": break
@@ -129,56 +129,49 @@ async def extract_details_with_retry(item_el):
         return {"sku": sku, "name": name, "price": price, "url": full_url}
     except: return None
 
-# --- スプレッドシート記帳 ＆ 物理反映確認 (Read-Back Verification) ---
-async def artisan_write_and_verify_physical(sheets, row_data, max_retry=3):
-    """
-    世界最高レベルの記帳安定性:
-    1. append_row で書き込み
-    2. 書き込まれたはずの行のD列(品番)を cell().value で直接読み戻す
-    3. 送信データと受信データが一致すれば合格
-    """
+# --- スプレッドシート記帳 ＆ 物理反映確認 ---
+async def artisan_write_and_verify(sheets, row_data, max_retry=3):
     sku_to_check = str(row_data[3]).upper().strip()
-    
     for attempt in range(max_retry):
         try:
-            # マスターに書き込み
+            await artisan_wait(3, 6)
+            # マスターへ記帳
             res = sheets["Master"].append_row(row_data)
-            # 更新された範囲から行番号を抽出
+            # 更新されたセルの行番号を取得
             updated_range = res.get('updates', {}).get('updatedRange', '')
             row_idx = re.search(r'A(\d+)', updated_range).group(1)
             
-            # APIの同期を待つ
-            await asyncio.sleep(8)
+            # 反映待ち
+            await asyncio.sleep(10)
             
-            # 物理検証（読み戻し）
+            # 書き込まれた中身を読み戻して「検品」
             actual_sku = sheets["Master"].cell(row_idx, 4).value
             if str(actual_sku).upper().strip() == sku_to_check:
-                # 合格した場合のみ Today_New にも同期
+                # 合格なら Today_New にも記帳
                 sheets["Today_New"].append_row(row_data)
                 return True
             else:
-                print(f"        [!] 検証失敗: 送信 {sku_to_check} vs 受信 {actual_sku}。再送中...")
+                print(f"        [!] 検証不合格 (Row:{row_idx})。再送します...")
         except Exception as e:
-            print(f"        [!] API制限発生: {e}。30秒後にリセット再開。")
-            await asyncio.sleep(30)
-            
+            print(f"        [!] API制限または通信エラー: {e}。休息中...")
+            await asyncio.sleep(40)
     return False
 
 # --- 執念のスクロール ---
-async def artisan_scroll_robust(page):
+async def artisan_scroll(page):
     last_count = 0
     for _ in range(15):
         items = await page.query_selector_all(".product-item")
         current_count = len(items)
         if current_count > 0 and current_count == last_count: break
         last_count = current_count
-        await page.mouse.wheel(0, 1000 + random.randint(0, 500))
+        await page.mouse.wheel(0, 1000 + random.randint(0, 300))
         await asyncio.sleep(2.5)
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await asyncio.sleep(2)
 
 async def run():
-    # --- 認証とシート初期化 ---
+    # --- Google認証 ---
     creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive'])
     client = gspread.authorize(creds)
@@ -195,7 +188,7 @@ async def run():
     JST = timezone(timedelta(hours=+9), 'JST')
     today_date = datetime.now(JST).strftime("%Y/%m/%d")
     
-    # 既存データのロード（品番列のみで高速化）
+    # 重複回避リストのロード
     existing_skus = set([str(s).upper().strip() for s in sheets["Master"].col_values(4)])
     sheets["Today_New"].clear()
     sheets["Today_New"].append_row(header)
@@ -208,79 +201,76 @@ async def run():
         )
         page = await context.new_page()
         
-        # エラー修正版のステルス呼び出し
+        # ステルス実装 (安定版呼び出し)
         try: await playwright_stealth.stealth_async(page)
         except: pass
 
         target_countries = ["FR", "HK", "US", "KR"]
 
         for cat_name, path_jp in CONFIG["JP"]["paths"].items():
-            print(f"\n【重要工程】カテゴリー: {cat_name}")
+            print(f"\n【最重要工程】カテゴリー: {cat_name}")
             
-            # 1. 日本サイトから最新の在庫網を取得 (除外フィルター)
+            # 1. 日本在庫網の構築
             await page.goto(f"https://www.hermes.com/jp/ja/category/{path_jp}/#|", wait_until="load", timeout=120000)
             await page.wait_for_selector(".product-item", timeout=30000)
-            await artisan_scroll_robust(page)
+            await artisan_scroll(page)
             jp_elements = await page.query_selector_all(".product-item")
             jp_skus = set()
             for el in jp_elements:
-                d = await extract_details_with_retry(el)
+                d = await extract_details_from_el(el)
                 if d: jp_skus.add(d["sku"])
-            print(f"    [国内網構築完了] {len(jp_skus)}件を把握。")
+            print(f"    -> 国内網構築完了 ({len(jp_skus)}件)")
 
-            # 2. 海外サイトの巡回と「一品完遂」処理
+            # 2. 国別に巡回 ＆ 一品完遂処理
             for country_key in target_countries:
-                print(f"\n  ### [{country_key}] 巡回中 ###")
+                print(f"\n  --- [{country_key}] リサーチ開始 ---")
                 target_path = CONFIG[country_key]["paths"].get(cat_name)
                 if not target_path: continue
                 
                 await page.goto(f"https://www.hermes.com/{CONFIG[country_key]['code']}/category/{target_path}/#|", wait_until="load", timeout=120000)
                 await page.wait_for_selector(".product-item", timeout=30000)
-                await artisan_scroll_robust(page)
+                await artisan_scroll(page)
                 
-                # 海外の商品要素を特定
                 os_elements = await page.query_selector_all(".product-item")
-                print(f"    [発見] {len(os_elements)} 個の要素。個別精査を開始。")
+                print(f"    -> 現場要素検知: {len(os_elements)}件。個別同期を開始します。")
 
                 for i, el in enumerate(os_elements):
-                    # --- ここから一品完遂直列ループ ---
-                    # A. 読み取り
-                    data = await extract_details_with_retry(el)
+                    # 【核心】一品ごとに読み取り、書き込み、検証を完結させる
+                    data = await extract_details_from_el(el)
                     if not data: continue
                     
                     sku_upper = str(data['sku']).upper().strip()
-                    print(f"      ({i+1}/{len(os_elements)}) {data['name']} ({sku_upper}) ...")
+                    print(f"      ({i+1}/{len(os_elements)}) {data['name']} ({sku_upper})")
                     
-                    # B. 日本・既存台帳との照合
+                    # 国内在庫・台帳既出のチェック
                     if sku_upper in jp_skus:
-                        print(f"        -> 国内在庫あり。スキップ。")
+                        print(f"        -> スキップ: 日本に存在します。")
                         continue
                     if sku_upper in existing_skus:
-                        print(f"        -> 台帳記載済み。重複スキップ。")
+                        print(f"        -> スキップ: 既に記帳済みです。")
                         continue
                     
-                    # C. 計算
+                    # 計算
                     try:
                         jpy = int(float(data['price']) * EXCHANGE_RATES.get(country_key, 1.0))
                     except: jpy = 0
                     row = [today_date, cat_name, country_key, sku_upper, data['name'], data['price'], f"¥{jpy:,}", data['url']]
                     
-                    # D. 記帳 ＆ 物理検証 (これが終わるまで次へ行かない)
-                    print(f"        [同期] 記帳と物理反映確認を実行中...")
-                    if await artisan_write_and_verify_physical(sheets, row):
+                    # 【同期】記帳 ＆ 検品 (成功するまでループを離さない)
+                    print(f"        [記帳] スプレッドシート同期中...")
+                    if await artisan_write_and_verify(sheets, row):
                         existing_skus.add(sku_upper)
-                        print(f"        [成功] 物理検品合格。次の一品へ。")
+                        print(f"        [完遂] 検品合格。次へ。")
                     else:
-                        print(f"        [警告] 一品の記帳に失敗しました。")
+                        print(f"        [失敗] この商品の記帳を断念しました。")
                     
-                    # E. 次の読み取り前のインターバル
+                    # 一品完遂後の待機
                     await artisan_wait(5, 10)
-                    # --- 一品完遂終了 ---
 
-                print(f"  ### [{country_key}] 完了 ###")
+                print(f"  --- [{country_key}] 全商品の直列処理終了 ---")
                 await artisan_wait(15, 30)
             
-            print(f"--- {cat_name} カテゴリー全工程完走 ---")
+            print(f"--- カテゴリー[{cat_name}] 完走 ---")
             await asyncio.sleep(45)
             
         await browser.close()
