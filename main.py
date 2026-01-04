@@ -7,11 +7,14 @@ import time
 import random
 import logging
 import sys
+import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Set, Any
 from oauth2client.service_account import ServiceAccountCredentials
-from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+from playwright.async_api import async_playwright, Page, ElementHandle
+
+# ステルスライブラリのインポート方法を最も安全な形式に変更
+import playwright_stealth
 
 # --- 設定：為替レート ＆ カテゴリー ---
 EXCHANGE_RATES = {"FR": 166.5, "HK": 20.8, "US": 158.0, "KR": 0.115}
@@ -80,16 +83,16 @@ async def write_and_confirm(sheet, row_data, max_retry=3):
             last_rows = sheet.get_all_values()[-5:]
             for r in last_rows:
                 if len(r) > 3 and str(r[3]).upper().strip() == sku_target:
-                    log.info(f"      ✅ [確認] 品番 {sku_target} をシートに刻みました。")
+                    log.info(f"      ✅ [物理確認成功] 品番 {sku_target} をシートに刻みました。")
                     return True
             log.warning(f"      [!] 反映が確認できません。リトライ中 ({attempt+1})")
         except Exception as e:
-            log.error(f"      [API制限] 60秒休息します... ({e})")
-            await asyncio.sleep(60)
+            log.error(f"      [APIエラー] 待機後に再試行します... ({e})")
+            await asyncio.sleep(45)
     return False
 
 async def scrape_site(page, country_code, category_path, is_jp=False):
-    """【昨日成功したロジック】シンプルで力強い巡回"""
+    """【シンプル巡回ロジック】確実にページ要素を取得する"""
     url = f"https://www.hermes.com/{country_code}/category/{category_path}/#|"
     
     for attempt in range(5 if is_jp else 2):
@@ -98,20 +101,20 @@ async def scrape_site(page, country_code, category_path, is_jp=False):
             await page.goto(url, wait_until="load", timeout=120000)
             
             try:
+                # 商品リストが表示されるまで待機
                 await page.wait_for_selector(".product-item", timeout=30000)
             except:
-                log.info(f"      [報告] 在庫なし。")
+                log.info(f"      [報告] 表示アイテムなし。")
                 return {}
 
-            # スクロール
-            for _ in range(15 if is_jp else 8):
-                await page.mouse.wheel(0, 800)
+            # 全件ロードのための確実なスクロール
+            for _ in range(12 if is_jp else 6):
+                await page.mouse.wheel(0, 1000)
                 await asyncio.sleep(1.5)
             
             items = await page.query_selector_all(".product-item")
             products = {}
             for item in items:
-                await item.scroll_into_view_if_needed()
                 name_el = await item.query_selector(".product-item-name")
                 link_el = await item.query_selector("a")
                 price_el = await item.query_selector(".product-item-price")
@@ -126,14 +129,14 @@ async def scrape_site(page, country_code, category_path, is_jp=False):
                     products[sku] = {"name": name, "price": price, "url": f"https://www.hermes.com{link}"}
             
             if is_jp and len(products) == 0:
-                log.warning("      [!] 日本サイトが0件です。リロードします。")
+                log.warning("      [!] 日本サイトの取得数が0です。再試行。")
                 continue
                 
-            log.info(f"   ✅ {country_code}: {len(products)}個を補足")
+            log.info(f"   ✅ {country_code}: {len(products)}個を検出")
             return products
         except Exception as e:
-            log.error(f"      [失敗] ページ読み込みエラー: {e}")
-            await asyncio.sleep(10)
+            log.error(f"      [エラー] ページ解析失敗: {e}")
+            await asyncio.sleep(5)
     return None if is_jp else {}
 
 async def run():
@@ -142,8 +145,12 @@ async def run():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_json, ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive'])
     client = gspread.authorize(creds)
     
-    # 物理的な実在確認
-    spreadsheet = client.open("Hermes_Check_List")
+    try:
+        spreadsheet = client.open("Hermes_Check_List")
+    except Exception as e:
+        log.error(f"❌ スプレッドシートが見つかりません。共有設定を確認してください: {e}")
+        return
+
     sheet_master = spreadsheet.get_worksheet(0)
     try: sheet_today = spreadsheet.worksheet("todays_new")
     except: sheet_today = spreadsheet.add_worksheet(title="todays_new", rows="5000", cols="20")
@@ -161,51 +168,53 @@ async def run():
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(viewport={"width": 2560, "height": 1440})
+        context = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await context.new_page()
-        await stealth_async(page)
+        
+        # --- 修正ポイント：関数存在確認を行いながら安全に呼び出し ---
+        if hasattr(playwright_stealth, 'stealth_async'):
+            await playwright_stealth.stealth_async(page)
+        elif hasattr(playwright_stealth, 'stealth'):
+            # 同期版しか存在しない場合のフォールバック（Actions環境対策）
+            playwright_stealth.stealth(page)
 
-        for cat_name, path_jp in CONFIG["JP"]["paths"].items():
-            log.info(f"\n{'='*60}\n【職人リサーチ】カテゴリー: {cat_name}\n{'='*60}")
-            
-            # 日本サイトのキャッシュ構築
-            jp_inv = await scrape_site(page, "jp/ja", path_jp, is_jp=True)
-            if jp_inv is None:
-                log.critical(f"❌ 日本サイト『{cat_name}』の取得に失敗。仕事を拒否します。")
-                continue # 次のカテゴリーへ
-            
-            for country in ["FR", "HK", "US", "KR"]:
-                log.info(f"   [{country}] 調査中...")
-                os_inv = await scrape_site(page, CONFIG[country]["code"], CONFIG[country]["paths"][cat_name])
+        try:
+            for cat_name, path_jp in CONFIG["JP"]["paths"].items():
+                log.info(f"\n{'='*60}\n【職人リサーチ】カテゴリー: {cat_name}\n{'='*60}")
                 
-                if not os_inv: continue
-
-                for sku, data in os_inv.items():
-                    sku_upper = str(sku).upper().strip()
+                jp_inv = await scrape_site(page, "jp/ja", path_jp, is_jp=True)
+                if not jp_inv:
+                    log.critical(f"❌ 日本サイト『{cat_name}』が空です。ボット検知の可能性があるため、このカテゴリーは中断。")
+                    continue
+                
+                for country in ["FR", "HK", "US", "KR"]:
+                    log.info(f"   [{country}] 調査中...")
+                    os_inv = await scrape_site(page, CONFIG[country]["code"], CONFIG[country]["paths"][cat_name])
                     
-                    if sku_upper not in jp_inv and sku_upper not in existing_skus:
-                        log.info(f"      [発見] 日本未入荷: {data['name']} ({sku_upper})")
-                        
-                        try:
-                            num = float(re.sub(r'[^\d.]', '', data['price'].replace(',', '')))
-                            jpy = int(num * EXCHANGE_RATES.get(country, 1.0))
-                        except: jpy = 0
-                        
-                        row = [today_date, cat_name, country, sku_upper, data['name'], data['price'], f"¥{jpy:,}", data['url']]
-                        
-                        # 記入 ＆ 検証
-                        if await write_and_confirm(sheet_master, row):
-                            await write_and_confirm(sheet_today, row)
-                            existing_skus.add(sku_upper)
-                        
-                        await asyncio.sleep(random.uniform(5, 10))
+                    if not os_inv: continue
 
-                await asyncio.sleep(15)
-            
-            log.info(f"--- {cat_name} 完了。休憩します。 ---")
-            await asyncio.sleep(45)
-
-        await browser.close()
+                    for sku, data in os_inv.items():
+                        sku_upper = str(sku).upper().strip()
+                        if sku_upper not in jp_inv and sku_upper not in existing_skus:
+                            log.info(f"      [発見] 日本未入荷: {data['name']} ({sku_upper})")
+                            
+                            try:
+                                num = float(re.sub(r'[^\d.]', '', data['price'].replace(',', '')))
+                                jpy = int(num * EXCHANGE_RATES.get(country, 1.0))
+                            except: jpy = 0
+                            
+                            row = [today_date, cat_name, country, sku_upper, data['name'], data['price'], f"¥{jpy:,}", data['url']]
+                            
+                            # マスターと当日の両方に確実に記入
+                            if await write_and_confirm(sheet_master, row):
+                                await write_and_confirm(sheet_today, row)
+                                existing_skus.add(sku_upper)
+                            
+                            await asyncio.sleep(random.uniform(5, 10))
+                    await asyncio.sleep(15)
+                await asyncio.sleep(30)
+        finally:
+            await browser.close()
 
 if __name__ == "__main__":
     asyncio.run(run())
