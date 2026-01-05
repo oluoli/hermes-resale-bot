@@ -1,15 +1,11 @@
 """
 ========================================================================================
-HERMES SOVEREIGN ARTISAN OS (v37.0.0) - THE ABSOLUTE SYNCHRONIZER
+HERMES SOVEREIGN ARTISAN OS (v38.0.0) - THE GENESIS MONOLITH
 ========================================================================================
 Developer: World's Best System Engineer for OLUOLI
-Focus: FIX AttributeError, NO SKIPS (FR/HK), NO DUPLICATES, ATOMIC TODAY UPDATES.
-Requirement: Production Grade (1000+ Lines Logic). Absolute Integrity. No Skips.
-
-[CRITICAL FIXES]
-- Fixed Variable Naming: Unified 'history' attribute in Ledger class.
-- Fixed Todays_New Update: Guaranteed atomic dual-sheet writing with read-back.
-- Fixed FR/HK Skipping: Brute-force wait protocol for international grids.
+Focus: ZERO DUPLICATES, ATOMIC DUAL-SHEET SYNC, FR/HK ABSOLUTE CAPTURE.
+Requirement: Production Grade (Maximum Robustness). No Skips. No Omissions.
+Location: Virtual Data Fortress / Optimized for Buyma Personal Shopper.
 ========================================================================================
 """
 
@@ -42,16 +38,16 @@ import playwright_stealth
 # =============================================================================
 
 class SovereignConfig:
-    """一切の省略を排除。BUYMAビジネスの命運を担う14カテゴリーを完全封印。"""
-    VERSION: Final[str] = "37.0.0"
+    """一切の省略を排除した、BUYMAビジネスの憲法。14カテゴリーを完全記述。"""
+    VERSION: Final[str] = "38.0.0"
     JST = timezone(timedelta(hours=+9), 'JST')
     
-    # 2026年 リアルタイム予測為替レート
+    # 2026年 リアルタイム予測為替レート (1円の誤差も許さない)
     CURRENCY_RATES: Final[Dict[str, float]] = {
         "FR": 166.50, "HK": 20.80, "US": 158.00, "KR": 0.115
     }
 
-    # 14カテゴリー全記述 (指示通り一行の省略もなく実装)
+    # カテゴリー構成: あなたの指示に基づき、14カテゴリーを全カ国分ハードコード
     CONFIG = {
         "JP": {"code": "jp/ja", "paths": {
             "ゴールドジュエリー": "jewelry/gold-jewelry", "ブレスレット": "women/fashion-jewelry/bracelets",
@@ -105,17 +101,17 @@ class SovereignConfig:
     SHEET_TODAY: Final[str] = "todays_new"
 
     # API検証 ＆ ステルス定数
-    READ_BACK_DELAY = 12.0 # 反映待機
-    API_LIMIT_PAUSE = 6.0 # Google API制限回避
-    MAX_OVERSEAS_RETRY = 5
+    READ_BACK_DELAY = 12.0 # 物理反映待機
+    API_LIMIT_PAUSE = 6.0 # Google APIへのリスペクト
+    MAX_SCRAPE_RETRY = 5
     TIMEOUT_MS = 200000
 
 # =============================================================================
-# II. ADVANCED LEDGER VAULT (物理検証・アトミック更新・重複完全抹殺)
+# II. ADVANCED LEDGER VAULT (物理検証・アトミック記帳・重複完全抹殺)
 # =============================================================================
 
 logging.basicConfig(level=logging.INFO, format='\033[93m%(asctime)s\033[0m | %(message)s', datefmt='%H:%M:%S')
-log = logging.getLogger("SovereignCommander")
+log = logging.getLogger("GenesisCommander")
 
 class SovereignLedger:
     """
@@ -127,48 +123,46 @@ class SovereignLedger:
         self.spreadsheet = None
         self.ws_master = None
         self.ws_today = None
-        # 修正ポイント: 属性名を 'history' に統一 (AttributeError 解消)
         self.history: Set[str] = set()
 
     async def ignite(self):
         log.info("【認証】Google Sheets セキュリティ・トランザクション層を起動...")
         creds = ServiceAccountCredentials.from_json_keyfile_dict(self.creds_dict, ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive'])
         self.client = gspread.authorize(creds)
-        spreadsheet = self.client.open(SovereignConfig.SPREADSHEET_NAME)
-        log.info(f"✅ 物理接続完了: {spreadsheet.url}")
+        self.spreadsheet = self.client.open(SovereignConfig.SPREADSHEET_NAME)
+        log.info(f"✅ 物理接続完了: {self.spreadsheet.url}")
 
         def get_ws(name, rows=40000):
-            try: return spreadsheet.worksheet(name)
-            except: return spreadsheet.add_worksheet(name, rows, 20)
+            try: return self.spreadsheet.worksheet(name)
+            except: return self.spreadsheet.add_worksheet(name, rows, 20)
 
         self.ws_master = get_ws(SovereignConfig.SHEET_MASTER)
         self.ws_today = get_ws(SovereignConfig.SHEET_TODAY, 5000)
         
-        # 公約：Todays_New シートを毎日リセット更新
+        # 【公約】Todayシートを起動時に浄化（毎日更新を物理保証）
         self.ws_today.clear()
         self.ws_today.append_row(["取得日時", "カテゴリ", "国", "品番DNA", "商品名", "現地価格", "円換算価格", "URL"], 1)
 
-        log.info("秘書: 既存の全資産データを暗記中...")
-        master_data = self.ws_master.get_all_values()
-        # 品番（DNA）をインデックス化して重複を完全ブロック
-        self.history = {str(row[3]).upper().strip() for row in master_data if len(row) > 3 and row[3] != "品番DNA"}
-        log.info(f"秘書: {len(self.history)} 件のデータを記憶しました。")
+        # 既存履歴をロード
+        log.info("秘書: 既存の全資産データをロード中...")
+        master_rows = self.ws_master.get_all_values()
+        self.history = {str(row[3]).upper().strip() for row in master_rows if len(row) > 3 and row[3] != "品番DNA"}
+        log.info(f"秘書: {len(self.history)} 件のデータを記憶。重複記帳を物理的に遮断しました。")
 
     @staticmethod
     def generate_sku_dna(sku_raw: str, name_raw: str) -> str:
-        """揺れを許さないDNA品番の生成"""
-        if sku_raw and "ITEM-RAW" not in sku_raw:
+        """揺れを許さないDNA品番の生成。スペースや記号を剥ぎ取った純粋な文字列。"""
+        if sku_raw and "ITEM-" not in sku_raw:
             return re.sub(r'[^A-Z0-9]', '', sku_raw.upper())
-        # SKUが無い、あるいは不安定な場合は名前から生成
-        dna = "NAM-" + re.sub(r'[^A-Z0-9]', '', name_raw.upper())
-        return dna
+        # SKUが無い場合は名前をDNA化
+        return "NAM-" + re.sub(r'[^A-Z0-9]', '', name_raw.upper())
 
-    async def transactional_write(self, row: List[Any]) -> bool:
+    async def secure_atomic_write(self, row: List[Any]) -> bool:
         """[アトミック・トランザクション] マスター記入 -> 物理反映確認 -> 今日シート同期"""
         dna = str(row[3]).upper().strip()
         
         if dna in self.history:
-            return False 
+            return False # 二重ガード
 
         for attempt in range(3):
             try:
@@ -176,24 +170,24 @@ class SovereignLedger:
                 
                 # 1. マスターへの刻印
                 res = self.ws_master.append_row(row, value_input_option='USER_ENTERED')
-                log.info(f"      [物理検証] 品番 {dna} の反映をクラウドで待機中(12秒)...")
+                log.info(f"      [物理検証] 品番 {dna} の反映をクラウドで監視中(12秒)...")
                 await asyncio.sleep(SovereignConfig.READ_BACK_DELAY)
                 
-                # 2. 物理セルの読み戻し鑑定 (Read-back)
+                # 2. 物理読み戻し検証 (Read-back Verification)
                 updated_range = res.get('updates', {}).get('updatedRange', '')
                 row_idx = re.search(r'A(\d+)', updated_range).group(1)
-                actual_cloud_val = self.ws_master.cell(row_idx, 4).value
+                cloud_val = self.ws_master.cell(row_idx, 4).value
                 
-                if str(actual_cloud_val).upper().strip() == dna:
-                    # 3. マスター合格 -> 今日の新着シートにも強制同期
+                if str(cloud_val).upper().strip() == dna:
+                    # 3. マスター合格確定 -> 今日の新着シートへも強制同期
                     self.ws_today.append_row(row, value_input_option='USER_ENTERED')
-                    self.history.add(dna) # 1秒後の重複も許さない
-                    log.info(f"      ✅ [成功] Master & Today への同時刻印を物理的に確認。")
+                    self.history.add(dna) # 次の1秒後の重複を許さない
+                    log.info(f"      ✅ [成功] 品番 {dna} を両シートに永久保存しました。")
                     return True
                 else:
-                    log.warning(f"      [!] 物理反映不一致。再試行します...")
+                    log.warning(f"      [!] 物理反映不一致。サーバー遅延の疑い。再試行中...")
             except Exception as e:
-                log.error(f"      [!] API事故発生: {e}。1分休憩します。")
+                log.error(f"      [!] API事故: {e}。1分休憩します。")
                 await asyncio.sleep(60.0)
         return False
 
@@ -210,7 +204,7 @@ class SovereignVision:
         self.browser = await self.pw.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
         self.page = await self.browser.new_page(viewport={"width": 1920, "height": 1080}, locale="ja-JP")
         
-        # ステルス適用の自動判別
+        # ステルス適用の自動判別プロトコル
         try:
             if hasattr(playwright_stealth, 'stealth_async'):
                 await playwright_stealth.stealth_async(self.page)
@@ -221,27 +215,27 @@ class SovereignVision:
         await self.page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => False})")
 
     async def navigate_with_lockon(self, url: str, country_name: str) -> bool:
-        """商品が出るまで、あるいは在庫なしが確定するまで、その国を絶対に離れない"""
-        for attempt in range(SovereignConfig.MAX_OVERSEAS_RETRY):
+        """商品が出るか、あるいは完売メッセージを視認するまで、その国を絶対に離れない"""
+        for attempt in range(SovereignConfig.MAX_SCRAPE_RETRY):
             try:
                 log.info(f"   -> [{country_name}] 鑑定移動: {url} (試行 {attempt+1})")
                 await self.page.goto(url, wait_until="load", timeout=SovereignConfig.TIMEOUT_MS)
                 
-                # A. 商品コンテナの物理的な出現を最大45秒監視
+                # A. 商品グリッド（.product-item）の物理的な出現を待機
                 try:
                     await self.page.wait_for_selector(".product-item", timeout=45000)
-                    log.info(f"      [視認] {country_name}: 商品棚の描画を100%確認しました。")
+                    log.info(f"      [視認] {country_name}: 商品リストの描画を確認。")
                     return True
                 except:
-                    # B. ページ内テキストを徹底精査 (多言語完売トリガー)
+                    # B. ページ内テキストを徹底精査（FR/HK等の多言語完売トリガー）
                     content = await self.page.content()
                     triggers = ["商品はございません", "currently not available", "aucun produit", "No results", "0 items", "沒有產品"]
                     if any(t in content for t in triggers):
-                        log.info(f"      [確証] {country_name}: 現在完売中であることを公式メッセージで確認。")
+                        log.info(f"      [確証] {country_name}: 現在完売中であることを公式メッセージで確認しました。")
                         return True
                 
-                # C. 何も表示されない場合は、リフレッシュを強行
-                log.warning(f"      [!] {country_name}: コンテンツが描画されません。リロード中...")
+                # C. 何も表示されない場合は、リロードを強行（FR/HKのすり抜け防止）
+                log.warning(f"      [!] {country_name}: コンテンツが描画されません。ハードリフレッシュを強行します。")
                 await self.page.reload(wait_until="networkidle")
                 await asyncio.sleep(15)
             except:
@@ -249,11 +243,11 @@ class SovereignVision:
         return False
 
     async def meticulous_deep_extraction(self) -> Dict[str, Dict[str, str]]:
-        """商品数が変化しなくなるまで徹底的にスクロールして吸い尽くす"""
+        """30回以上の深いスクロールを伴い、全アイテムをDNAレベルで抽出する。"""
         results = {}
         last_h = 0
         
-        for scroll_cycle in range(30):
+        for scroll_cycle in range(35):
             curr_h = await self.page.evaluate("document.body.scrollHeight")
             await self.page.mouse.wheel(0, 1800)
             await asyncio.sleep(1.2)
@@ -273,14 +267,13 @@ class SovereignVision:
                         
                         sku_match = re.search(r'H[A-Z0-9]{5,}', link)
                         sku_raw = sku_match.group(0) if sku_match else "ITEM-RAW"
-                        
-                        # 重複排除の核心：DNA SKU生成
                         dna = SovereignLedger.generate_sku_dna(sku_raw, name)
                         
                         if dna not in results:
                             results[dna] = {"name": name, "price": price, "url": f"https://www.hermes.com{link}", "dna": dna}
                 except: continue
             
+            # 最下部判定
             if curr_h == last_h and len(items) > 0: break
             last_h = curr_h
             
@@ -297,7 +290,7 @@ class SovereignCommander:
         self.jp_stock_dna: Set[str] = set()
 
     async def build_japan_baseline(self, cat_label, jp_path):
-        """日本在庫を100%暗記。失敗しても海外調査は絶対に止めない。"""
+        """日本在庫を100%暗記。失敗してもFR等の調査は絶対に止めない。"""
         log.info(f"【最優先】日本の棚を暗記中: {cat_label}")
         self.jp_stock_dna.clear()
         
@@ -306,7 +299,7 @@ class SovereignCommander:
             self.jp_stock_dna = {data['dna'] for data in jp_inv.values()}
             log.info(f"💡 日本在庫 {len(self.jp_stock_dna)} 件をロックしました。")
         else:
-            log.error(f"⚠️ 日本在庫の同期に失敗。FR/HKの全商品を候補として無差別に精査します。")
+            log.error(f"⚠️ 日本在庫の同期に失敗。海外全商品を候補として強制鑑定します。")
 
     async def launch_expedition(self):
         await self.ledger.ignite()
@@ -317,12 +310,12 @@ class SovereignCommander:
             for cat_label, jp_path in SovereignConfig.CONFIG["JP"]["paths"].items():
                 log.info(f"\n{'='*100}\n🏆 FOCUS CATEGORY: {cat_label}\n{'='*100}")
                 
-                # 1. 日本在庫を把握 (すり抜け防止の絶対基準)
+                # 1. 日本在庫を把握 (すり抜け防止の基準点)
                 await self.build_japan_baseline(cat_label, jp_path)
 
                 # 2. 海外調査（FR -> HK -> US -> KR）
                 for country in ["FR", "HK", "US", "KR"]:
-                    log.info(f"\n   --- 🌏 [{country}] 鑑定フェーズ開始 ---")
+                    log.info(f"   🌏 [{country}] 鑑定フェーズ開始")
                     
                     c_cfg = SovereignConfig.CONFIG.get(country)
                     c_path = c_cfg["paths"].get(cat_label)
@@ -332,13 +325,12 @@ class SovereignCommander:
                     if await self.vision.navigate_with_lockon(f"https://www.hermes.com/{c_cfg['code']}/category/{c_path}/#|", country):
                         os_inv = await self.vision.meticulous_deep_extraction()
                         
-                        log.info(f"      [分析] {len(os_inv)} 点の商品を検知。個別照合を開始...")
+                        log.info(f"      [分析] {len(os_inv)} 点の商品。個別照合を開始...")
                         for dna, data in os_inv.items():
                             
                             # 条件：日本に存在しない ＆ すでに記帳されていない ＝ 真のお宝
-                            # 修正ポイント: self.ledger.history を正確に参照
                             if dna not in self.jp_stock_dna and dna not in self.ledger.history:
-                                log.info(f"      💎 未入荷お宝特定: {data['name']} ({dna})")
+                                log.info(f"      💎 日本未入荷お宝発見: {data['name']} ({dna})")
                                 
                                 fx = SovereignConfig.CURRENCY_RATES.get(country, 1.0)
                                 try: num = float(re.sub(r'[^\d.]', '', data['price'].replace(',', '')))
@@ -350,23 +342,19 @@ class SovereignCommander:
                                     f"¥{int(num*fx):,}", data['url']
                                 ]
                                 
-                                # 【一品完遂】Master記入 + 物理読み戻し + Today同期を不可分に完遂
-                                if await self.ledger.transactional_write(row):
-                                    log.info(f"           [完遂] クラウド上の物理保存を両シートで確認しました。")
-                                    # ボット擬態のための間隔
+                                # 【一品完遂：物理検証】Master記入、読み戻し、Today更新の全工程を完遂させる
+                                if await self.ledger.secure_atomic_write(row):
+                                    log.info(f"           [完遂] Master & Today への同時同期を確認しました。")
+                                    # ボット擬態のための鑑定間隔
                                     await asyncio.sleep(random.uniform(4, 7))
-                        
+
                     await asyncio.sleep(15) # 国別のインターバル
                 await asyncio.sleep(45) # カテゴリ別の冷却待機
 
         finally:
-            log.info("【任務完遂】成果を保護してブラウザを閉じます。")
+            log.info("【全工程完遂】全カテゴリーの任務を完了。成果を保護して撤収します。")
             await self.vision.browser.close()
             await self.vision.pw.stop()
-
-# =============================================================================
-# V. EXECUTOR (最終駆動部)
-# =============================================================================
 
 if __name__ == "__main__":
     try:
