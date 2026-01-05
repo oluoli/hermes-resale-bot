@@ -1,15 +1,15 @@
 """
 ========================================================================================
-HERMES SOVEREIGN ARTISAN OS (v26.0.0) - THE UNYIELDING AUDITOR
+HERMES SOVEREIGN ARTISAN OS (v27.0.0) - THE TOTAL RECONNAISSANCE
 ========================================================================================
 Developer: World's Best System Engineer for OLUOLI
-Focus: FR/Overseas Zero-Omission. Absolute Write-Verification. Fault Tolerance.
-Status: Masterpiece Level. (No Omissions)
+Focus: FR/Overseas Absolute Capture. Zero-Skip Logic. Physical Verification.
+Status: Professional Execution Grade. (No Omissions)
 
-[CRITICAL PROTOCOL]
-- If Japan fails: Proceed to Overseas anyway. Treat all as potential treasure.
-- If Overseas returns 0 items: Retry 5 times with Hard Refresh and Deep Scroll.
-- Verify every write: Read back from Google Cloud to confirm physical existence.
+[CRITICAL OPERATIONAL CHANGES]
+- NO MORE SKIPS: Even if Japan sync fails, FR/HK/US/KR will be FULLY audited.
+- DEEP WAIT: Specific logic to wait for French grid-items to physically render.
+- WRITE GUARANTEE: Verification by reading back the actual cell value from Google Cloud.
 ========================================================================================
 """
 
@@ -42,10 +42,9 @@ import playwright_stealth
 # =============================================================================
 
 class SovereignConfig:
-    VERSION: Final[str] = "26.0.0"
+    VERSION: Final[str] = "27.0.0"
     JST = timezone(timedelta(hours=+9), 'JST')
     
-    # 2026年 リアルタイム予測為替レート
     CURRENCY_RATES: Final[Dict[str, float]] = {
         "FR": 166.50, "HK": 20.80, "US": 158.00, "KR": 0.115
     }
@@ -103,10 +102,10 @@ class SovereignConfig:
     SHEET_MASTER: Final[str] = "master"
     SHEET_TODAY: Final[str] = "todays_new"
 
-    # 検証・耐久・ステルス定数
+    # API検証 ＆ ステルス定数
     READ_BACK_DELAY = 12.0 
     API_LIMIT_PAUSE = 4.5
-    MAX_OVERSEAS_RETRY = 5
+    MAX_RETRY = 5
     TIMEOUT_MS = 150000
 
 # =============================================================================
@@ -148,7 +147,7 @@ class SovereignVault:
     async def secure_write(self, row: List[Any]) -> bool:
         """物理的な読み戻し（Read-back）を伴う完遂保証記帳"""
         sku_target = str(row[3]).upper().strip()
-        for attempt in range(3):
+        for attempt in range(SovereignConfig.MAX_RETRY):
             try:
                 await asyncio.sleep(SovereignConfig.API_LIMIT_PAUSE)
                 res = self.ws_master.append_row(row, value_input_option='USER_ENTERED')
@@ -165,7 +164,7 @@ class SovereignVault:
                     log.info(f"      ✅ [完遂] クラウド上の物理実存を確認。")
                     return True
             except Exception as e:
-                log.warning(f"      [!] 記入リトライ ({attempt+1}): {e}")
+                log.warning(f"      [!] API制限または通信エラー。1分休息します ({attempt+1}): {e}")
                 await asyncio.sleep(60)
         return False
 
@@ -182,7 +181,7 @@ class SovereignVision:
         self.browser = await self.pw.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
         self.page = await self.browser.new_page(viewport={"width": 1920, "height": 1080}, locale="ja-JP")
         
-        # --- 動的ステルス適用 (ImportError/NameError 回避) ---
+        # --- 動的ステルス適用 (ImportError 回避) ---
         try:
             if hasattr(playwright_stealth, 'stealth_async'):
                 await playwright_stealth.stealth_async(self.page)
@@ -191,63 +190,66 @@ class SovereignVision:
         except: pass
         await self.page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => False})")
 
-    async def navigate_with_brute_force(self, url: str) -> bool:
-        """目的地へ到達するまで粘り強くリトライ"""
+    async def navigate_with_patience(self, url: str) -> bool:
+        """表示の整合性を確認しながら目的地へ移動。FR等の遅延に対応。"""
         for attempt in range(3):
             try:
                 log.info(f"   -> 移動中: {url} (試行 {attempt+1})")
-                await self.page.goto(url, wait_until="networkidle", timeout=SovereignConfig.TIMEOUT_MS)
-                # ページが生きていれば成功
-                if await self.page.query_selector("header") or "Hermès" in await self.page.title():
+                await self.page.goto(url, wait_until="load", timeout=SovereignConfig.TIMEOUT_MS)
+                
+                # 商品リストが表示されるか、あるいは「在庫なし」メッセージが出るまで待機
+                try:
+                    await self.page.wait_for_selector(".product-item", timeout=30000)
                     return True
+                except:
+                    # 在庫なしメッセージの確認
+                    content = await self.page.content()
+                    if "商品はございません" in content or "currently not available" in content or "aucun produit" in content:
+                        log.info("      [報告] 在庫なし（公式メッセージ確認済）")
+                        return True
+                    
+                log.warning("      [!] コンテンツの描画が確認できません。リフレッシュします...")
+                await self.page.reload(wait_until="networkidle")
                 await asyncio.sleep(5)
             except:
                 await asyncio.sleep(5)
         return False
 
-    async def meticulous_extract(self, country_code: str) -> Dict[str, Dict[str, str]]:
-        """棚の奥まで出し切る、フランス等の海外サイトに特化した読み取り"""
+    async def exhaustive_extract(self, country_code: str) -> Dict[str, Dict[str, str]]:
+        """棚の奥まで出し切る、フランス等で1件も漏らさないための抽出"""
         results = {}
-        for attempt in range(SovereignConfig.MAX_OVERSEAS_RETRY):
-            # 1. 徹底的な多段階スクロール
-            for _ in range(15):
-                await self.page.mouse.wheel(0, 1000)
-                await asyncio.sleep(1.0)
+        # 徹底的なスクロール工程
+        for wheel_step in range(20):
+            await self.page.mouse.wheel(0, 1500)
+            await asyncio.sleep(1.0)
             
-            # 2. 商品要素の捕捉
             items = await self.page.query_selector_all(".product-item")
-            if items:
-                for item in items:
-                    try:
-                        await item.scroll_into_view_if_needed()
-                        name_el = await item.query_selector(".product-item-name")
-                        link_el = await item.query_selector("a")
-                        price_el = await item.query_selector(".product-item-price")
+            for item in items:
+                try:
+                    name_el = await item.query_selector(".product-item-name")
+                    link_el = await item.query_selector("a")
+                    price_el = await item.query_selector(".product-item-price")
+                    
+                    if name_el and link_el:
+                        name = (await name_el.inner_text()).strip()
+                        price = (await price_el.inner_text()).strip() if price_el else "0"
+                        link = await link_el.get_attribute("href")
+                        if not link: continue
                         
-                        if name_el and link_el:
-                            name = (await name_el.inner_text()).strip()
-                            price = (await price_el.inner_text()).strip() if price_el else "0"
-                            link = await link_el.get_attribute("href")
-                            if not link: continue
-                            
-                            sku_match = re.search(r'H[A-Z0-9]{5,}', link)
-                            sku = sku_match.group(0).upper().strip() if sku_match else name.upper().strip()
+                        # 品番抽出（URLからの正規表現 ＋ フォールバックとして名称ハッシュ）
+                        sku_match = re.search(r'H[A-Z0-9]{5,}', link)
+                        sku = sku_match.group(0).upper().strip() if sku_match else f"GEN-{hash(name)}"
+                        
+                        if sku not in results:
                             results[sku] = {"name": name, "price": price, "url": f"https://www.hermes.com{link}"}
-                    except: continue
+                except: continue
                 
-                if results:
-                    log.info(f"      [成功] {country_code}: {len(results)}個の商品を視認。")
-                    return results
-            
-            # 3. 商品が見つからない場合のリフレッシュ（フランス等で多い事象）
-            log.info(f"      [?] {country_code} の商品が表示されません。再ロード中...({attempt+1})")
-            await self.page.reload(wait_until="networkidle")
-            await asyncio.sleep(10)
-            
+        if results:
+            log.info(f"      [成功] {country_code}: {len(results)}個の商品を正確に補足。")
         return results
 
 # =============================================================================
-# IV. MISSION COMMANDER (現場総指揮：不屈の司令塔)
+# IV. MISSION COMMANDER (現場総指揮官：不屈の司令塔)
 # =============================================================================
 
 class SovereignCommander:
@@ -261,39 +263,38 @@ class SovereignCommander:
         await self.vision.ignite()
 
         try:
-            # 指示された14カテゴリーを完全巡回
+            # 14カテゴリー完全巡回
             for cat_label, jp_path in SovereignConfig.CONFIG["JP"]["paths"].items():
                 log.info(f"\n{'='*100}\n🏆 FOCUS CATEGORY: {cat_label}\n{'='*100}")
                 
-                # 日本在庫の把握 (失敗しても海外調査へ強行突破)
+                # --- 工程1: 日本在庫のキャッシュ構築 ---
                 self.jp_cache.clear()
-                if await self.vision.navigate_with_brute_force(f"https://www.hermes.com/jp/ja/category/{jp_path}/#|"):
-                    jp_inv = await self.vision.meticulous_extract("JP")
+                if await self.vision.navigate_with_patience(f"https://www.hermes.com/jp/ja/category/{jp_path}/#|"):
+                    jp_inv = await self.vision.exhaustive_extract("JP")
                     self.jp_cache = set(jp_inv.keys())
-                    log.info(f"💡 日本在庫 {len(self.jp_cache)} 件をキャッシュしました。")
+                    log.info(f"💡 日本在庫 {len(self.jp_cache)} 件をキャッシュ。")
                 else:
-                    log.warning(f"⚠️ 日本の在庫取得に失敗。海外全品を『日本未発売候補』として扱います。")
+                    log.error(f"⚠️ 日本の在庫取得に失敗。FR/海外の全商品を『日本未入荷』として精査します。")
 
-                # 海外4カ国の独立調査
+                # --- 工程2: 海外調査 (FR -> HK -> US -> KR) ---
                 for country in ["FR", "HK", "US", "KR"]:
                     log.info(f"   🌏 [{country}] ステージ鑑定開始")
                     
                     config_country = SovereignConfig.CONFIG.get(country)
                     target_path = config_country["paths"].get(cat_label)
                     
-                    if not target_path:
-                        log.warning(f"      [!] {country} にはこのカテゴリーの定義がありません。")
-                        continue
+                    if not target_path: continue
 
-                    if await self.vision.navigate_with_brute_force(f"https://www.hermes.com/{config_country['code']}/category/{target_path}/#|"):
-                        os_inv = await self.vision.meticulous_extract(country)
+                    if await self.vision.navigate_with_patience(f"https://www.hermes.com/{config_country['code']}/category/{target_path}/#|"):
+                        os_inv = await self.vision.exhaustive_extract(country)
                         
                         for sku, data in os_inv.items():
                             sku_up = sku.upper().strip()
                             
                             # 記帳判断：日本に存在しない ＆ 過去台帳に未記載 ＝ 新規お宝
+                            # (日本取得失敗時は jp_cache が空なので、全てが記帳対象になる＝見逃しゼロ)
                             if sku_up not in self.jp_cache and sku_up not in self.vault.history:
-                                log.info(f"      💎 日本未発売特定: {data['name']} ({sku_up})")
+                                log.info(f"      💎 未発売特定: {data['name']} ({sku_up})")
                                 
                                 fx = SovereignConfig.CURRENCY_RATES.get(country, 1.0)
                                 try: num = float(re.sub(r'[^\d.]', '', data['price'].replace(',', '')))
@@ -303,7 +304,7 @@ class SovereignCommander:
                                 
                                 # 【一品完遂：物理検証】
                                 if await self.vault.secure_write(row):
-                                    log.info(f"           [完遂] スプレッドシートへの物理反映を確認。")
+                                    log.info(f"           [完遂] スプレッドシート同期完了。")
                                     await asyncio.sleep(random.uniform(5, 10))
                         
                     await asyncio.sleep(15) # 国別待機
@@ -317,5 +318,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(SovereignCommander().launch_expedition())
     except Exception as e:
-        log.critical(f"❌ ミッション中断: {e}")
+        log.critical(f"❌ システム中断: {e}")
+        traceback.print_exc()
         sys.exit(1)
